@@ -64,7 +64,7 @@ fn empty_tree_returns_empty_result() {
     let styles: HashMap<usize, ComputedStyle> = HashMap::new();
     let mut tree = build_layout_tree(&doc, &styles);
 
-    let result = compute_layout(&mut tree, 800.0, 600.0);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout should succeed");
 
     assert!(result.nodes.is_empty(), "空 DOM 树应产生空布局结果");
 }
@@ -83,7 +83,7 @@ fn single_element_fixed_size() {
     styles.insert(Rc::as_ptr(&root) as usize, root_style);
 
     let mut tree = build_layout_tree(&root, &styles);
-    let result = compute_layout(&mut tree, 800.0, 600.0);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout should succeed");
 
     let layout = result
         .get(Rc::as_ptr(&root) as usize)
@@ -103,7 +103,7 @@ fn block_element_fills_viewport_width() {
 
     let styles: HashMap<usize, ComputedStyle> = HashMap::new();
     let mut tree = build_layout_tree(&root, &styles);
-    let result = compute_layout(&mut tree, 800.0, 600.0);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout should succeed");
 
     let layout = result
         .get(Rc::as_ptr(&root) as usize)
@@ -138,7 +138,7 @@ fn flex_row_children_horizontal_layout() {
     styles.insert(Rc::as_ptr(&child2) as usize, child_style);
 
     let mut tree = build_layout_tree(&root, &styles);
-    let result = compute_layout(&mut tree, 800.0, 600.0);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout should succeed");
 
     let c1 = result
         .get(Rc::as_ptr(&child1) as usize)
@@ -180,7 +180,7 @@ fn flex_column_children_vertical_layout() {
     styles.insert(Rc::as_ptr(&child2) as usize, child_style);
 
     let mut tree = build_layout_tree(&root, &styles);
-    let result = compute_layout(&mut tree, 800.0, 600.0);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout should succeed");
 
     let c1 = result
         .get(Rc::as_ptr(&child1) as usize)
@@ -219,7 +219,7 @@ fn padding_offsets_child_position() {
     styles.insert(Rc::as_ptr(&child) as usize, child_style);
 
     let mut tree = build_layout_tree(&root, &styles);
-    let result = compute_layout(&mut tree, 800.0, 600.0);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout should succeed");
 
     let c = result
         .get(Rc::as_ptr(&child) as usize)
@@ -262,7 +262,7 @@ fn flex_justify_content_space_between() {
     styles.insert(Rc::as_ptr(&child3) as usize, child_style);
 
     let mut tree = build_layout_tree(&root, &styles);
-    let result = compute_layout(&mut tree, 800.0, 600.0);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout should succeed");
 
     let c1 = result
         .get(Rc::as_ptr(&child1) as usize)
@@ -311,7 +311,7 @@ fn flex_grow_distributes_free_space() {
     styles.insert(Rc::as_ptr(&child2) as usize, c2_style);
 
     let mut tree = build_layout_tree(&root, &styles);
-    let result = compute_layout(&mut tree, 800.0, 600.0);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout should succeed");
 
     let c1 = result
         .get(Rc::as_ptr(&child1) as usize)

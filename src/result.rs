@@ -1,9 +1,14 @@
-//! 布局计算结果提取。
+//! 布局计算结果提取与错误类型。
 //!
 //! [`LayoutResult`] 是 [`compute_layout`](crate::compute_layout) 的输出，
 //! 按 DOM 节点指针地址索引每个元素的位置与尺寸。
+//!
+//! [`LayoutError`] 是 [`compute_layout`](crate::compute_layout) 可能返回的错误，
+//! 用于替代旧的 `expect` panic，便于上层应用做降级处理（如跳过该元素、显示错误占位符）。
 
 use std::collections::HashMap;
+
+use taffy::NodeId;
 
 /// 单个元素的布局结果。
 ///
@@ -18,6 +23,49 @@ pub struct NodeLayout {
     pub width: f32,
     /// 计算后的高度（px）。
     pub height: f32,
+}
+
+/// 布局计算错误。
+///
+/// 所有错误均来自 taffy 内部，通常由 NaN/Inf 输入、循环 flex 引用、
+/// 或不存在的 NodeId 查询触发。调用方应通过 `Result` 处理，
+/// 而非依赖 `expect` panic 跨模块传播。
+#[derive(Debug)]
+pub enum LayoutError {
+    /// taffy `compute_layout` 失败。常见原因：flex 容器循环引用、
+    /// style 中包含 NaN/Inf、taffy 内部断言失败。
+    ComputeLayoutFailed(taffy::TaffyError),
+    /// `taffy.layout(node)` 查询失败：节点不在布局树中。
+    /// 通常由 `node_map` 与 taffy 内部状态不同步导致。
+    NodeLayoutMissing(NodeId),
+}
+
+impl std::fmt::Display for LayoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LayoutError::ComputeLayoutFailed(e) => {
+                write!(f, "taffy compute_layout failed: {e}")
+            }
+            LayoutError::NodeLayoutMissing(id) => {
+                write!(f, "taffy layout missing for node {id:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LayoutError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LayoutError::ComputeLayoutFailed(e) => Some(e),
+            LayoutError::NodeLayoutMissing(_) => None,
+        }
+    }
+}
+
+impl From<taffy::TaffyError> for LayoutError {
+    fn from(e: taffy::TaffyError) -> Self {
+        LayoutError::ComputeLayoutFailed(e)
+    }
 }
 
 /// 整棵布局树的结果集合。

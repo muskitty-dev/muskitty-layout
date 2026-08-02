@@ -59,7 +59,7 @@ fn full_pipeline(html: &str, css: &str, viewport_w: f32, viewport_h: f32) -> Pip
     let mut tree = build_layout_tree(&dom, &styles);
 
     // 5. 计算布局
-    let layout = compute_layout(&mut tree, viewport_w, viewport_h);
+    let layout = compute_layout(&mut tree, viewport_w, viewport_h).expect("layout should succeed");
 
     PipelineResult { dom, layout }
 }
