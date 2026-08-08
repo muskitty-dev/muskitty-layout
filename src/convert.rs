@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use muskitty_cascade::{ComputedStyle, ComputedValue};
+use muskitty_cascade::ComputedStyle;
 use muskitty_dom::Node;
 use taffy::NodeId;
 
@@ -81,19 +81,18 @@ fn build_node_recursive(
         let computed = styles.get(&addr);
 
         // display: none → 跳过该节点及其整个子树。
+        // 单态化（P2-20）后关键字/解析值统一为 token 序列，直接检查是否含
+        // `none` Ident。
         if let Some(cs) = computed {
             if let Some(cv) = cs.get("display") {
-                let is_none = match cv {
-                    ComputedValue::Keyword(kw) => kw.eq_ignore_ascii_case("none"),
-                    ComputedValue::Resolved(cvs) | ComputedValue::Raw(cvs) => cvs.iter().any(|c| {
-                        matches!(
-                            c,
-                            muskitty_css::parser::ComponentValue::PreservedToken(
-                                muskitty_css::tokenizer::Token::Ident(s)
-                            ) if s.eq_ignore_ascii_case("none")
-                        )
-                    }),
-                };
+                let is_none = cv.tokens().iter().any(|c| {
+                    matches!(
+                        c,
+                        muskitty_css::parser::ComponentValue::PreservedToken(
+                            muskitty_css::tokenizer::Token::Ident(s)
+                        ) if s.eq_ignore_ascii_case("none")
+                    )
+                });
                 if is_none {
                     return None;
                 }

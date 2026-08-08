@@ -18,9 +18,9 @@ fn make_element(tag: &str, doc: &Rc<RefCell<Node>>) -> Rc<RefCell<Node>> {
     Node::new_element_html(tag, vec![], doc)
 }
 
-/// 构造 `Npx` 的 Resolved ComputedValue。
+/// 构造 `Npx` 的 ComputedValue。
 fn px(val: f64) -> ComputedValue {
-    ComputedValue::Resolved(vec![ComponentValue::PreservedToken(Token::Dimension(
+    ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Dimension(
         Numeric {
             value: val,
             is_integer: false,
@@ -31,12 +31,12 @@ fn px(val: f64) -> ComputedValue {
 
 /// 构造关键字 ComputedValue。
 fn kw(s: &str) -> ComputedValue {
-    ComputedValue::Keyword(s.to_string())
+    ComputedValue::from_keyword(s)
 }
 
-/// 构造纯数字的 Resolved ComputedValue（用于 flex-grow/flex-shrink）。
+/// 构造纯数字的 ComputedValue（用于 flex-grow/flex-shrink）。
 fn num(val: f64) -> ComputedValue {
-    ComputedValue::Resolved(vec![ComponentValue::PreservedToken(Token::Number(
+    ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Number(
         Numeric {
             value: val,
             is_integer: false,

@@ -201,25 +201,14 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
 
 // —— 辅助函数 ——
 
-/// 从 ComputedStyle 中读取指定属性的 Keyword 值（小写化由调用方决定）。
+/// 从 ComputedStyle 中读取指定属性的关键字值（小写化由调用方决定）。
 ///
-/// 支持两种来源：
-/// - `ComputedValue::Keyword(s)` — defaulting 产生的初始值
-/// - `ComputedValue::Resolved/Raw([Ident(s)])` — cascade pipeline 产生的关键字
+/// 单态化（P2-20）后关键字即首个 Ident token，直接退化到
+/// [`ComputedValue::keyword`]（defaulting 初始值与 cascade pipeline
+/// 产物统一处理）。
 fn get_keyword(cs: &ComputedStyle, name: &str) -> Option<String> {
-    match cs.get(name) {
-        Some(ComputedValue::Keyword(kw)) => Some(kw.clone()),
-        Some(ComputedValue::Resolved(cvs)) | Some(ComputedValue::Raw(cvs)) => {
-            // 从 component values 中提取第一个 Ident token
-            for cv in cvs {
-                if let ComponentValue::PreservedToken(Token::Ident(s)) = cv {
-                    return Some(s.clone());
-                }
-            }
-            None
-        }
-        _ => None,
-    }
+    cs.get(name)
+        .and_then(|cv| cv.keyword().map(|s| s.to_string()))
 }
 
 /// `justify-content` 关键字 → [`JustifyContent`]。
@@ -262,19 +251,19 @@ fn map_align_items(kw: &str) -> Option<AlignItems> {
 /// - `px` 长度 → [`Dimension::length`]
 /// - 百分比 → [`Dimension::percent`]（0.0-1.0 区间）
 fn map_dimension(cv: &ComputedValue) -> Dimension {
-    match cv {
-        ComputedValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => Dimension::AUTO,
-        ComputedValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => Dimension::AUTO,
-        ComputedValue::Resolved(cvs) | ComputedValue::Raw(cvs) => {
-            if let Some(px) = extract_px(cvs) {
-                Dimension::length(px)
-            } else if let Some(pct) = extract_percent(cvs) {
-                Dimension::percent(pct / 100.0)
-            } else {
-                Dimension::AUTO
-            }
+    // 单态化（P2-20）：关键字即首个 Ident，其余按 token 序列解析。
+    if let Some(kw) = cv.keyword() {
+        if kw.eq_ignore_ascii_case("auto") || kw.eq_ignore_ascii_case("none") {
+            return Dimension::AUTO;
         }
-        _ => Dimension::AUTO,
+    }
+    let cvs = cv.tokens();
+    if let Some(px) = extract_px(cvs) {
+        Dimension::length(px)
+    } else if let Some(pct) = extract_percent(cvs) {
+        Dimension::percent(pct / 100.0)
+    } else {
+        Dimension::AUTO
     }
 }
 
@@ -285,10 +274,13 @@ fn map_dimension(cv: &ComputedValue) -> Dimension {
 /// 映射为 [`LengthPercentageAuto::AUTO`]。
 fn map_length_percentage_auto(cv: Option<&ComputedValue>) -> LengthPercentageAuto {
     match cv {
-        Some(ComputedValue::Keyword(kw)) if kw.eq_ignore_ascii_case("auto") => {
-            LengthPercentageAuto::AUTO
-        }
-        Some(ComputedValue::Resolved(cvs)) | Some(ComputedValue::Raw(cvs)) => {
+        Some(cv) => {
+            if let Some(kw) = cv.keyword() {
+                if kw.eq_ignore_ascii_case("auto") {
+                    return LengthPercentageAuto::AUTO;
+                }
+            }
+            let cvs = cv.tokens();
             if let Some(px) = extract_px(cvs) {
                 LengthPercentageAuto::length(px)
             } else if let Some(pct) = extract_percent(cvs) {
@@ -297,14 +289,15 @@ fn map_length_percentage_auto(cv: Option<&ComputedValue>) -> LengthPercentageAut
                 LengthPercentageAuto::ZERO
             }
         }
-        _ => LengthPercentageAuto::ZERO,
+        None => LengthPercentageAuto::ZERO,
     }
 }
 
 /// 将 `Option<&ComputedValue>` 映射为 [`LengthPercentage`]（用于 padding/gap）。
 fn map_length_percentage(cv: Option<&ComputedValue>) -> LengthPercentage {
     match cv {
-        Some(ComputedValue::Resolved(cvs)) | Some(ComputedValue::Raw(cvs)) => {
+        Some(cv) => {
+            let cvs = cv.tokens();
             if let Some(px) = extract_px(cvs) {
                 LengthPercentage::length(px)
             } else if let Some(pct) = extract_percent(cvs) {
@@ -313,7 +306,7 @@ fn map_length_percentage(cv: Option<&ComputedValue>) -> LengthPercentage {
                 LengthPercentage::ZERO
             }
         }
-        _ => LengthPercentage::ZERO,
+        None => LengthPercentage::ZERO,
     }
 }
 
@@ -360,11 +353,7 @@ fn extract_all_lengths(cvs: &[ComponentValue]) -> Vec<f32> {
 /// - 单值：row_gap == col_gap
 /// - 双值：第一个为 row_gap，第二个为 col_gap
 fn extract_gap_pair(cv: &ComputedValue) -> (LengthPercentage, LengthPercentage) {
-    let cvs = match cv {
-        ComputedValue::Resolved(cvs) | ComputedValue::Raw(cvs) => cvs,
-        _ => return (LengthPercentage::ZERO, LengthPercentage::ZERO),
-    };
-    let lengths = extract_all_lengths(cvs);
+    let lengths = extract_all_lengths(cv.tokens());
     match lengths.len() {
         0 => (LengthPercentage::ZERO, LengthPercentage::ZERO),
         1 => {
@@ -393,11 +382,7 @@ fn extract_percent(cvs: &[ComponentValue]) -> Option<f32> {
 
 /// 从 [`ComputedValue`] 中提取第一个数字值（用于 flex-grow/flex-shrink）。
 fn extract_number_from_cv(cv: &ComputedValue) -> Option<f32> {
-    let cvs = match cv {
-        ComputedValue::Resolved(cvs) | ComputedValue::Raw(cvs) => cvs,
-        _ => return None,
-    };
-    for cv in cvs {
+    for cv in cv.tokens() {
         if let ComponentValue::PreservedToken(Token::Number(numeric)) = cv {
             return Some(numeric.value as f32);
         }

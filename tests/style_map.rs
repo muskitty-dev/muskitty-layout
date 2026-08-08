@@ -9,9 +9,9 @@ use muskitty_layout::style_map::map_style;
 use taffy::prelude::*;
 use taffy::style::{BoxSizing, Dimension, Display, FlexDirection, FlexWrap, LengthPercentage};
 
-/// 构造 `Npx` 的 Resolved ComputedValue。
+/// 构造 `Npx` 的 ComputedValue。
 fn px(val: f64) -> ComputedValue {
-    ComputedValue::Resolved(vec![ComponentValue::PreservedToken(Token::Dimension(
+    ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Dimension(
         Numeric {
             value: val,
             is_integer: false,
@@ -20,9 +20,9 @@ fn px(val: f64) -> ComputedValue {
     ))])
 }
 
-/// 构造 `Npx Mpx` 双值的 Resolved ComputedValue（用于 `gap` 简写双值测试）。
+/// 构造 `Npx Mpx` 双值的 ComputedValue（用于 `gap` 简写双值测试）。
 fn px_pair(val1: f64, val2: f64) -> ComputedValue {
-    ComputedValue::Resolved(vec![
+    ComputedValue::from_tokens(vec![
         ComponentValue::PreservedToken(Token::Dimension(
             Numeric {
                 value: val1,
@@ -41,9 +41,9 @@ fn px_pair(val1: f64, val2: f64) -> ComputedValue {
     ])
 }
 
-/// 构造 `N%` 的 Resolved ComputedValue。
+/// 构造 `N%` 的 ComputedValue。
 fn pct(val: f64) -> ComputedValue {
-    ComputedValue::Resolved(vec![ComponentValue::PreservedToken(Token::Percentage(
+    ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Percentage(
         Numeric {
             value: val,
             is_integer: false,
@@ -51,9 +51,9 @@ fn pct(val: f64) -> ComputedValue {
     ))])
 }
 
-/// 构造纯数字的 Resolved ComputedValue（用于 flex-grow/flex-shrink）。
+/// 构造纯数字的 ComputedValue（用于 flex-grow/flex-shrink）。
 fn num(val: f64) -> ComputedValue {
-    ComputedValue::Resolved(vec![ComponentValue::PreservedToken(Token::Number(
+    ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Number(
         Numeric {
             value: val,
             is_integer: false,
@@ -62,7 +62,7 @@ fn num(val: f64) -> ComputedValue {
 }
 
 fn kw(s: &str) -> ComputedValue {
-    ComputedValue::Keyword(s.to_string())
+    ComputedValue::from_keyword(s)
 }
 
 // —— display ——

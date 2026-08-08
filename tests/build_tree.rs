@@ -71,7 +71,7 @@ fn display_none_excluded() {
     let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
     let p_addr = Rc::as_ptr(&p) as usize;
     let mut p_style = ComputedStyle::new();
-    p_style.set("display", ComputedValue::Keyword("none".to_string()));
+    p_style.set("display", ComputedValue::from_keyword("none"));
     styles.insert(p_addr, p_style);
 
     let tree = build_layout_tree(&root, &styles);
@@ -97,7 +97,7 @@ fn display_none_excludes_entire_subtree() {
 
     let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
     let mut p_style = ComputedStyle::new();
-    p_style.set("display", ComputedValue::Keyword("none".to_string()));
+    p_style.set("display", ComputedValue::from_keyword("none"));
     styles.insert(Rc::as_ptr(&p) as usize, p_style);
 
     let tree = build_layout_tree(&root, &styles);
