@@ -28,6 +28,9 @@ pub type StyleMap = HashMap<usize, ComputedStyle>;
 /// - [`Element`](muskitty_dom::NodeKind::Element) 节点 → 映射 ComputedStyle 为
 ///   taffy [`Style`](taffy::style::Style) 并创建 taffy 节点。
 /// - `display: none` 的元素及其子树被跳过（不生成布局盒）。
+/// - `display: contents` 的元素不生成盒，其子元素直接参与祖父格式上下文
+///   （P2-12，CSS Display L3 §2.5）。
+/// - head/title/script/style 等非渲染标签不生成盒（P2-13）。
 /// - Text / Comment / Document 等非元素节点跳过（文本测量推迟到后续批次）。
 ///
 /// DOM 节点的 `Rc` 指针地址（`Rc::as_ptr(node) as usize`）作为 [`LayoutTree::node_map`]
@@ -38,9 +41,10 @@ pub fn build_layout_tree(root: &Rc<RefCell<Node>>, styles: &StyleMap) -> LayoutT
     // （HTML 解析的根是 Document 节点，需要找到 <html> 元素）
     let root_element = find_root_element(root);
     if let Some(root_el) = root_element {
-        if let Some(root_id) = build_node_recursive(&mut tree, &root_el, styles) {
-            tree.root = Some(root_id);
-        }
+        // 根元素可能 display:none / contents 而不生成根盒；取首个生成的 box
+        // 作为树根（contents 根极罕见，防御处理）。
+        let roots = build_node_recursive(&mut tree, &root_el, styles);
+        tree.root = roots.first().copied();
     }
     tree
 }
@@ -63,53 +67,69 @@ fn find_root_element(node: &Rc<RefCell<Node>>) -> Option<Rc<RefCell<Node>>> {
 
 /// 递归为 DOM 子树构建 taffy 节点。
 ///
-/// 返回 `None` 表示该节点不生成布局盒（非元素或 display:none）。
+/// 返回该 DOM 子树生成的所有 taffy box：
+/// - 非元素 / `display: none` / 非渲染标签 → 空（不生成盒）。
+/// - `display: contents` → 元素不生成盒，其子元素直接参与祖父格式上下文，
+///   返回子元素生成的 box（P2-12）。
+/// - 普通元素 → 生成一个盒，返回 `[id]`。
 fn build_node_recursive(
     tree: &mut LayoutTree,
     node: &Rc<RefCell<Node>>,
     styles: &StyleMap,
-) -> Option<NodeId> {
+) -> Vec<NodeId> {
     // 先收集节点信息并释放 node 的借用，避免在递归期间持有 RefCell 借用。
-    let (addr, computed, children) = {
+    let (addr, computed, children, is_contents) = {
         let node_ref = node.borrow();
         let kind = &node_ref.kind;
-        if !matches!(kind, muskitty_dom::NodeKind::Element(_)) {
-            return None;
-        }
+        let (addr, tag) = match kind {
+            muskitty_dom::NodeKind::Element(el) => (
+                Rc::as_ptr(node) as usize,
+                el.local_name.to_ascii_lowercase(),
+            ),
+            _ => return Vec::new(),
+        };
 
-        let addr = Rc::as_ptr(node) as usize;
         let computed = styles.get(&addr);
 
-        // display: none → 跳过该节点及其整个子树。
-        // 单态化（P2-20）后关键字/解析值统一为 token 序列，直接检查是否含
-        // `none` Ident。
-        if let Some(cs) = computed {
-            if let Some(cv) = cs.get("display") {
-                let is_none = cv.tokens().iter().any(|c| {
-                    matches!(
-                        c,
-                        muskitty_css::parser::ComponentValue::PreservedToken(
-                            muskitty_css::tokenizer::Token::Ident(s)
-                        ) if s.eq_ignore_ascii_case("none")
-                    )
-                });
-                if is_none {
-                    return None;
-                }
-            }
+        // P2-13: head/title/script/style/meta/link/base/template 等非渲染标签
+        // 不生成布局盒（无 UA 表时默认，避免多余空白盒）。
+        if is_non_rendered_tag(&tag) {
+            return Vec::new();
         }
+
+        // display 关键字（单态化后取首个 Ident，P2-20）。
+        let display_kw = computed
+            .and_then(|cs| cs.get("display"))
+            .and_then(|cv| cv.keyword())
+            .map(|s| s.to_ascii_lowercase());
+
+        // display: none → 跳过该节点及其整个子树。
+        if display_kw.as_deref() == Some("none") {
+            return Vec::new();
+        }
+
+        let is_contents = display_kw.as_deref() == Some("contents");
 
         // 克隆子节点 Rc 引用，释放 node_ref 借用后再递归。
         let children: Vec<Rc<RefCell<Node>>> = node_ref.child_nodes().to_vec();
-        (addr, computed, children)
+        (addr, computed, children, is_contents)
     };
+
+    // display: contents → 元素不生成盒，子元素直接参与父格式上下文，
+    // 返回子元素生成的 box 列表，由父节点拼接（P2-12）。
+    if is_contents {
+        return children
+            .iter()
+            .flat_map(|child| build_node_recursive(tree, child, styles))
+            .collect();
+    }
 
     let taffy_style = style_map::map_style(computed);
 
     // 先递归处理子节点，收集已创建的 taffy NodeId 列表。
     let child_ids: Vec<NodeId> = children
         .iter()
-        .filter_map(|child| build_node_recursive(tree, child, styles))
+        .flat_map(|child| build_node_recursive(tree, child, styles))
         .collect();
 
     // 根据是否有子节点选择创建方式。
@@ -124,5 +144,15 @@ fn build_node_recursive(
     };
 
     tree.node_map.insert(addr, taffy_node);
-    Some(taffy_node)
+    vec![taffy_node]
+}
+
+/// 非渲染元素标签：这些标签不产生可视化盒（head 及其元数据、脚本、样式等）。
+///
+/// 无 UA 样式表时给它们建布局盒会生成多余的空白盒（P2-13）。
+fn is_non_rendered_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "head" | "title" | "script" | "style" | "meta" | "link" | "base" | "template"
+    )
 }
