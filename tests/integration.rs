@@ -15,17 +15,12 @@
 //!     → LayoutResult (per-element x/y/width/height)
 //! ```
 
-use muskitty_cascade::{
-    apply_defaulting, cascade_for_element, cascade_winner, collect_declared_values, compute_value,
-    ComputeContext, ComputedStyle, ComputedValue, BUILTIN_PROPERTIES,
-};
+use muskitty_cascade::{compute_styles, StyleTreeOptions};
 use muskitty_css::parse_stylesheet;
 use muskitty_cssom::{from_stylesheet, Origin};
 use muskitty_dom::{Node, NodeKind};
 use muskitty_layout::{build_layout_tree, compute_layout};
-use muskitty_selectors::matching::DomElement;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 // —— 辅助函数 ——
@@ -50,10 +45,7 @@ fn full_pipeline(html: &str, css: &str, viewport_w: f32, viewport_h: f32) -> Pip
     };
 
     // 3. 遍历 DOM，对每个元素计算 ComputedStyle
-    let empty_props: HashMap<String, Vec<muskitty_css::parser::ComponentValue>> = HashMap::new();
-    let ctx = ComputeContext::new(&empty_props);
-    let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
-    compute_styles_recursive(&dom, &[sheet], &ctx, None, &mut styles);
+    let styles = compute_styles(&dom, &[sheet], &StyleTreeOptions::default());
 
     // 4. 构建布局树
     let mut tree = build_layout_tree(&dom, &styles);
@@ -62,70 +54,6 @@ fn full_pipeline(html: &str, css: &str, viewport_w: f32, viewport_h: f32) -> Pip
     let layout = compute_layout(&mut tree, viewport_w, viewport_h).expect("layout should succeed");
 
     PipelineResult { dom, layout }
-}
-
-/// 递归遍历 DOM 树，计算每个元素的 ComputedStyle。
-fn compute_styles_recursive(
-    node: &Rc<std::cell::RefCell<Node>>,
-    sheets: &[muskitty_cssom::CssStyleSheet],
-    ctx: &ComputeContext,
-    parent_style: Option<&ComputedStyle>,
-    styles: &mut HashMap<usize, ComputedStyle>,
-) {
-    let is_element = matches!(node.borrow().kind, NodeKind::Element(_));
-    let addr = Rc::as_ptr(node) as usize;
-    if is_element {
-        let element = DomElement::new(Rc::clone(node));
-
-        // 收集 declared values
-        let declared = collect_declared_values(&element, sheets);
-
-        // cascade 排序
-        let groups = cascade_for_element(declared);
-
-        // 对每个注册属性计算 computed value
-        let mut cs = ComputedStyle::new();
-        for (property, group) in &groups {
-            let winner = cascade_winner(group);
-            let cascaded = winner.map(|w| w.value.as_slice());
-            let specified = apply_defaulting(
-                property,
-                cascaded,
-                parent_style.and_then(|ps| ps.get(property)),
-            );
-            // 对 Raw 值调用 compute_value
-            let computed = match &specified {
-                ComputedValue::Raw(cvs) => compute_value(property, cvs, ctx),
-                _ => specified,
-            };
-            cs.set(property.clone(), computed);
-        }
-
-        // 对未在 stylesheet 中出现的属性，也要做 defaulting 以获取初始值/继承值
-        for prop_def in BUILTIN_PROPERTIES.iter() {
-            if !cs.properties.contains_key(prop_def.name) {
-                let specified = apply_defaulting(
-                    prop_def.name,
-                    None,
-                    parent_style.and_then(|ps| ps.get(prop_def.name)),
-                );
-                let computed = match &specified {
-                    ComputedValue::Raw(cvs) => compute_value(prop_def.name, cvs, ctx),
-                    _ => specified,
-                };
-                cs.set(prop_def.name.to_string(), computed);
-            }
-        }
-
-        styles.insert(addr, cs);
-    }
-
-    // 递归处理子节点
-    let children: Vec<Rc<std::cell::RefCell<Node>>> = node.borrow().child_nodes().to_vec();
-    let parent_cs = styles.get(&addr).cloned();
-    for child in &children {
-        compute_styles_recursive(child, sheets, ctx, parent_cs.as_ref(), styles);
-    }
 }
 
 // —— 测试用例 ——
