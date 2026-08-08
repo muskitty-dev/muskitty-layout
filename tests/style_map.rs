@@ -373,16 +373,16 @@ fn align_items_stretch() {
 }
 
 #[test]
-fn align_items_normal_maps_to_flex_start() {
-    // CSS Flexbox §8.3 + Box Alignment §6.1: align-items: normal 在 flex 布局中
-    // 等价于 start (= flex-start)。不能回退到 taffy 默认 STRETCH。
+fn align_items_normal_falls_back_to_stretch() {
+    // P0-2: CSS Box Alignment §7.1: align-items: normal 在 flex 布局中行为
+    // 等价于 stretch（交叉轴拉伸填满容器）。映射为 None 让 taffy 用默认
+    // STRETCH，而非之前错误映射的 flex-start（使所有 flex 容器默认失去拉伸）。
     let mut cs = ComputedStyle::new();
     cs.set("align-items", kw("normal"));
     let style = map_style(Some(&cs));
     assert_eq!(
-        style.align_items,
-        Some(AlignItems::FLEX_START),
-        "align-items: normal 在 flex 布局中应等价于 flex-start，而非 STRETCH"
+        style.align_items, None,
+        "align-items: normal 应回退到 taffy 默认 STRETCH（None），而非 flex-start"
     );
 }
 

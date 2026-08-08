@@ -228,19 +228,20 @@ fn map_justify_content(kw: &str) -> Option<JustifyContent> {
 ///
 /// # 规范依据
 ///
-/// - CSS Flexbox Level 1 §8.3: `align-items` 接受 `normal` 关键字
-/// - CSS Box Alignment Level 3 §6.1: `normal` 在 flex 布局中行为等价于 `start`
-/// - CSS Flexbox §8.3: `start` 对齐到 cross-axis 起始端，等价于 `flex-start`
-///
-/// 因此 `normal` 显式映射为 [`AlignItems::FLEX_START`]，避免落入 `_` 分支返回
-/// `None` 后被 taffy 默认值 `STRETCH` 覆盖。
+/// - CSS Box Alignment Level 3 §7.1: `align-items: normal` 在 flex 布局中
+///   行为等价于 `stretch`（交叉轴拉伸填满容器），因此返回 `None` 让 taffy
+///   用默认值 `STRETCH`（P0-2）。之前错误映射为 `flex-start` 使所有 flex
+///   容器默认失去拉伸。
+/// - `start` / `end` 是逻辑对齐关键字（§5.1），映射为对应的 flex 边。
+/// - CSS Flexbox §8.3: `start` 对齐到 cross-axis 起始端，等价于 `flex-start`。
 fn map_align_items(kw: &str) -> Option<AlignItems> {
     Some(match kw {
         "stretch" => AlignItems::STRETCH,
-        "flex-start" | "start" | "normal" => AlignItems::FLEX_START,
+        "flex-start" | "start" => AlignItems::FLEX_START,
         "center" => AlignItems::CENTER,
         "flex-end" | "end" => AlignItems::FLEX_END,
         "baseline" => AlignItems::BASELINE,
+        // normal（→ stretch）与未知值统一返回 None，交给 taffy 默认值。
         _ => return None,
     })
 }
