@@ -18,9 +18,7 @@
 #   [dev-dep] muskitty-html5-parser (path) → muskitty-dom
 #                                         → muskitty-html5-tokenizer (path)
 #
-# Almost all path deps are independent repos under muskitty-dev/. Exceptions:
-# muskitty-cascade and muskitty-cssom are not yet stripped to standalone repos;
-# they are pulled from the main workspace repo (Ink-dark/MusKitty) below.
+# All path deps are independent repos under muskitty-dev/.
 #
 # Auth: GitHub sometimes rate-limits anonymous git clones from CI runners,
 # returning 401 and prompting for a username (which fails in non-interactive
@@ -52,22 +50,5 @@ clone_if_absent https://github.com/muskitty-dev/muskitty-selectors.git ../muskit
 clone_if_absent https://github.com/muskitty-dev/muskitty-html5-parser.git ../muskitty-html5-parser
 clone_if_absent https://github.com/muskitty-dev/muskitty-html5-tokenizer.git ../muskitty-html5-tokenizer
 
-# ── Un-stripped crates (still in-tree members of the main workspace repo) ──
-# cascade and cssom are not yet independent repos under muskitty-dev/. Pull
-# their source from a shallow clone of Ink-dark/MusKitty instead. Their own
-# path deps (muskitty-css/cssom/dom/selectors) resolve from this same ../ dir.
-fetch_from_main_repo() {
-    local crate="$1"
-    if [ -d "../$crate" ]; then
-        echo "skip ../$crate (exists)"
-        return
-    fi
-    local tmp
-    tmp=$(mktemp -d)
-    git clone --depth 1 https://github.com/Ink-dark/MusKitty.git "$tmp"
-    cp -r "$tmp/crates/$crate" "../$crate"
-    rm -rf "$tmp"
-}
-
-fetch_from_main_repo muskitty-cascade
-fetch_from_main_repo muskitty-cssom
+clone_if_absent https://github.com/muskitty-dev/muskitty-cascade.git ../muskitty-cascade
+clone_if_absent https://github.com/muskitty-dev/muskitty-cssom.git ../muskitty-cssom
