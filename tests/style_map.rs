@@ -20,27 +20,6 @@ fn px(val: f64) -> ComputedValue {
     ))])
 }
 
-/// 构造 `Npx Mpx` 双值的 ComputedValue（用于 `gap` 简写双值测试）。
-fn px_pair(val1: f64, val2: f64) -> ComputedValue {
-    ComputedValue::from_tokens(vec![
-        ComponentValue::PreservedToken(Token::Dimension(
-            Numeric {
-                value: val1,
-                is_integer: false,
-            },
-            "px".to_string(),
-        )),
-        ComponentValue::PreservedToken(Token::Whitespace),
-        ComponentValue::PreservedToken(Token::Dimension(
-            Numeric {
-                value: val2,
-                is_integer: false,
-            },
-            "px".to_string(),
-        )),
-    ])
-}
-
 /// 构造 `N%` 的 ComputedValue。
 fn pct(val: f64) -> ComputedValue {
     ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Percentage(
@@ -443,6 +422,42 @@ fn justify_content_space_between() {
 }
 
 #[test]
+fn justify_content_end_maps_to_flex_end() {
+    // P2-10: justify-content: end → FLEX_END（修复前落入默认 flex-start）。
+    let mut cs = ComputedStyle::new();
+    cs.set("justify-content", kw("end"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.justify_content, Some(JustifyContent::FLEX_END));
+}
+
+#[test]
+fn justify_content_right_maps_to_flex_end() {
+    // P2-10: justify-content: right → FLEX_END。
+    let mut cs = ComputedStyle::new();
+    cs.set("justify-content", kw("right"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.justify_content, Some(JustifyContent::FLEX_END));
+}
+
+#[test]
+fn justify_content_start_maps_to_flex_start() {
+    // P2-10: justify-content: start → FLEX_START（显式映射）。
+    let mut cs = ComputedStyle::new();
+    cs.set("justify-content", kw("start"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.justify_content, Some(JustifyContent::FLEX_START));
+}
+
+#[test]
+fn justify_content_normal_falls_back_to_default() {
+    // P2-10: justify-content: normal → None（flex 布局默认 flex-start）。
+    let mut cs = ComputedStyle::new();
+    cs.set("justify-content", kw("normal"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.justify_content, None);
+}
+
+#[test]
 fn align_items_center() {
     let mut cs = ComputedStyle::new();
     cs.set("align-items", kw("center"));
@@ -489,6 +504,34 @@ fn align_self_center() {
     cs.set("align-self", kw("center"));
     let style = map_style(Some(&cs));
     assert_eq!(style.align_self, Some(AlignSelf::CENTER));
+}
+
+// —— align-content ——
+
+#[test]
+fn align_content_space_between_maps() {
+    // P2-11: align-content 之前完全未映射。
+    let mut cs = ComputedStyle::new();
+    cs.set("align-content", kw("space-between"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.align_content, Some(AlignContent::SPACE_BETWEEN));
+}
+
+#[test]
+fn align_content_stretch_maps() {
+    let mut cs = ComputedStyle::new();
+    cs.set("align-content", kw("stretch"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.align_content, Some(AlignContent::STRETCH));
+}
+
+#[test]
+fn align_content_normal_falls_back_to_none() {
+    // P2-11: normal → None（stretch 语义，交 taffy 默认）。
+    let mut cs = ComputedStyle::new();
+    cs.set("align-content", kw("normal"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.align_content, None);
 }
 
 // —— flex-grow / flex-shrink / flex-basis ——
@@ -554,16 +597,10 @@ fn flex_basis_auto() {
     );
 }
 
-// —— gap ——
-
-#[test]
-fn gap_px_sets_both_axes() {
-    let mut cs = ComputedStyle::new();
-    cs.set("gap", px(10.0));
-    let style = map_style(Some(&cs));
-    assert_eq!(style.gap.width, LengthPercentage::length(10.0));
-    assert_eq!(style.gap.height, LengthPercentage::length(10.0));
-}
+// —— gap（仅 row-gap / column-gap 长属性）——
+//
+// `gap` 简写在 cascade 收集时已展开为 `row-gap` + `column-gap`（P2-9/B8），
+// 布局层只读长属性，不再直接读 `gap`。
 
 #[test]
 fn row_gap_and_column_gap_independent() {
@@ -576,31 +613,14 @@ fn row_gap_and_column_gap_independent() {
 }
 
 #[test]
-fn gap_shorthand_two_values_split_correctly() {
-    // CSS Box Alignment §6.2: gap: <row-gap> <column-gap>?
-    // 两个值时第一个设置 row-gap（height 轴），第二个设置 column-gap（width 轴）。
+fn row_gap_and_column_gap_percentages_map() {
+    // P2-8: 百分比 gap 不丢失（taffy 原生支持）。gap 简写含百分比时在
+    // cascade 展开为 row-gap/column-gap 百分比，映射层经 map_length_percentage
+    // 保留为 percent。
     let mut cs = ComputedStyle::new();
-    // gap: 10px 20px → row-gap: 10px (height), column-gap: 20px (width)
-    cs.set("gap", px_pair(10.0, 20.0));
+    cs.set("row-gap", pct(5.0));
+    cs.set("column-gap", pct(20.0));
     let style = map_style(Some(&cs));
-    assert_eq!(
-        style.gap.height,
-        LengthPercentage::length(10.0),
-        "gap 双值的第一个值应设置 row-gap (height 轴)"
-    );
-    assert_eq!(
-        style.gap.width,
-        LengthPercentage::length(20.0),
-        "gap 双值的第二个值应设置 column-gap (width 轴)"
-    );
-}
-
-#[test]
-fn gap_shorthand_single_value_sets_both() {
-    // CSS Box Alignment §6.2: 单值时同时设置 row-gap 和 column-gap.
-    let mut cs = ComputedStyle::new();
-    cs.set("gap", px(15.0));
-    let style = map_style(Some(&cs));
-    assert_eq!(style.gap.height, LengthPercentage::length(15.0));
-    assert_eq!(style.gap.width, LengthPercentage::length(15.0));
+    assert_eq!(style.gap.height, LengthPercentage::percent(0.05));
+    assert_eq!(style.gap.width, LengthPercentage::percent(0.20));
 }

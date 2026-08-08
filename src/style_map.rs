@@ -14,8 +14,8 @@ use muskitty_css::parser::ComponentValue;
 use muskitty_css::tokenizer::Token;
 use taffy::geometry::Rect;
 use taffy::style::{
-    AlignItems, BoxSizing, Dimension, Display, FlexDirection, FlexWrap, JustifyContent,
-    LengthPercentage, LengthPercentageAuto, Style,
+    AlignContent, AlignItems, BoxSizing, Dimension, Display, FlexDirection, FlexWrap,
+    JustifyContent, LengthPercentage, LengthPercentageAuto, Style,
 };
 use taffy::style_helpers::{TaffyAuto, TaffyZero};
 
@@ -139,6 +139,12 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
         style.justify_content = map_justify_content(&kw.to_ascii_lowercase());
     }
 
+    // —— align-content ——
+    // CSS Box Alignment Level 3 §8.1: 多行 flex 容器的交叉轴行分布。
+    if let Some(kw) = get_keyword(cs, "align-content") {
+        style.align_content = map_align_content(&kw.to_ascii_lowercase());
+    }
+
     // —— align-items ——
     if let Some(kw) = get_keyword(cs, "align-items") {
         style.align_items = map_align_items(&kw.to_ascii_lowercase());
@@ -177,24 +183,16 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
         style.flex_basis = map_dimension(cv);
     }
 
-    // —— gap / row-gap / column-gap ——
-    // CSS Box Alignment Level 3 §6.2: gap 简写语法 `gap: <row-gap> <column-gap>?`.
-    // - 单值：同时设置 row-gap（height 轴）和 column-gap（width 轴）
-    // - 双值：第一个设置 row-gap，第二个设置 column-gap
-    // 单独的 row-gap / column-gap 声明覆盖对应轴（在 gap 之后声明时）。
-    let mut gap = style.gap;
-    if let Some(cv) = cs.get("gap") {
-        let (row_gap, col_gap) = extract_gap_pair(cv);
-        gap.height = row_gap;
-        gap.width = col_gap;
-    }
+    // —— row-gap / column-gap ——
+    // CSS Box Alignment Level 3 §6.2: `gap` 简写已在 cascade 收集时展开为
+    // `row-gap` + `column-gap`（P2-9/B8），此处只读长属性。百分比 gap 经
+    // [`map_length_percentage`] 保留（taffy 原生支持百分比 gap，P2-8）。
     if let Some(cv) = cs.get("column-gap") {
-        gap.width = map_length_percentage(Some(cv));
+        style.gap.width = map_length_percentage(Some(cv));
     }
     if let Some(cv) = cs.get("row-gap") {
-        gap.height = map_length_percentage(Some(cv));
+        style.gap.height = map_length_percentage(Some(cv));
     }
-    style.gap = gap;
 
     style
 }
@@ -212,14 +210,41 @@ fn get_keyword(cs: &ComputedStyle, name: &str) -> Option<String> {
 }
 
 /// `justify-content` 关键字 → [`JustifyContent`]。
+///
+/// # 规范依据
+///
+/// CSS Box Alignment Level 3 §5.1: `start`/`end` 是逻辑对齐关键字（writing-mode
+/// 相对），`left`/`right` 是物理对齐关键字；在 LTR flex 布局中均等价于对应
+/// flex 边。`normal` 行为等价于 `start`（flex 布局默认 flex-start），返回 `None`
+/// 让 taffy 默认值生效（P2-10）。
 fn map_justify_content(kw: &str) -> Option<JustifyContent> {
     Some(match kw {
-        "flex-start" => JustifyContent::FLEX_START,
+        "flex-start" | "start" | "left" => JustifyContent::FLEX_START,
         "center" => JustifyContent::CENTER,
-        "flex-end" => JustifyContent::FLEX_END,
+        "flex-end" | "end" | "right" => JustifyContent::FLEX_END,
         "space-between" => JustifyContent::SPACE_BETWEEN,
         "space-around" => JustifyContent::SPACE_AROUND,
         "space-evenly" => JustifyContent::SPACE_EVENLY,
+        _ => return None,
+    })
+}
+
+/// `align-content` 关键字 → [`AlignContent`]。
+///
+/// # 规范依据
+///
+/// CSS Box Alignment Level 3 §8.1: 多行 flex 容器的交叉轴行分布。
+/// `normal` 行为等价于 `stretch`（默认行拉伸），返回 `None` 让 taffy 默认值
+/// 生效（P2-11）。
+fn map_align_content(kw: &str) -> Option<AlignContent> {
+    Some(match kw {
+        "stretch" => AlignContent::STRETCH,
+        "flex-start" | "start" => AlignContent::FLEX_START,
+        "center" => AlignContent::CENTER,
+        "flex-end" | "end" => AlignContent::FLEX_END,
+        "space-between" => AlignContent::SPACE_BETWEEN,
+        "space-around" => AlignContent::SPACE_AROUND,
+        "space-evenly" => AlignContent::SPACE_EVENLY,
         _ => return None,
     })
 }
@@ -339,54 +364,6 @@ fn extract_px(cvs: &[ComponentValue]) -> Option<f32> {
         }
     }
     None
-}
-
-/// 从 component value 列表中提取所有长度值（px 或百分比），跳过空白。
-///
-/// 用于 `gap` 简写双值解析：返回所有非空白的有效长度值。
-fn extract_all_lengths(cvs: &[ComponentValue]) -> Vec<f32> {
-    let mut result = Vec::new();
-    for cv in cvs {
-        match cv {
-            ComponentValue::PreservedToken(Token::Whitespace) => continue,
-            ComponentValue::PreservedToken(Token::Dimension(numeric, unit))
-                if unit.eq_ignore_ascii_case("px") =>
-            {
-                result.push(numeric.value as f32);
-            }
-            ComponentValue::PreservedToken(Token::Percentage(numeric)) => {
-                // gap 百分比在 taffy 中按 LengthPercentage::percent 处理，
-                // 这里统一转为 0.0-1.0 区间返回 f32，由调用方决定如何使用。
-                // 但当前 gap 不支持百分比，暂不处理（返回空让 fallback 生效）。
-                let _ = numeric;
-            }
-            _ => {}
-        }
-    }
-    result
-}
-
-/// 解析 `gap` 简写的 ComputedValue，返回 (row_gap, column_gap)。
-///
-/// CSS Box Alignment §6.2: `gap: <row-gap> <column-gap>?`
-/// - 单值：row_gap == col_gap
-/// - 双值：第一个为 row_gap，第二个为 col_gap
-fn extract_gap_pair(cv: &ComputedValue) -> (LengthPercentage, LengthPercentage) {
-    let lengths = extract_all_lengths(cv.tokens());
-    match lengths.len() {
-        0 => (LengthPercentage::ZERO, LengthPercentage::ZERO),
-        1 => {
-            let lp = LengthPercentage::length(lengths[0]);
-            (lp, lp)
-        }
-        _ => {
-            // 双值或更多：第一个为 row_gap，第二个为 column_gap
-            (
-                LengthPercentage::length(lengths[0]),
-                LengthPercentage::length(lengths[1]),
-            )
-        }
-    }
 }
 
 /// 从 component value 列表中提取第一个百分比值（0.0-100.0）。
