@@ -65,6 +65,37 @@ fn kw(s: &str) -> ComputedValue {
     ComputedValue::from_keyword(s)
 }
 
+/// 将内部 component values 包进 `calc(...)` Function（P1-9）。
+fn calc(inner: Vec<ComponentValue>) -> ComputedValue {
+    ComputedValue::from_tokens(vec![ComponentValue::Function(
+        muskitty_css::parser::Function {
+            name: "calc".to_string(),
+            value: inner,
+        },
+    )])
+}
+
+/// 构造 `calc(<Npx>)` 的 Function ComputedValue。
+fn calc_px(val: f64) -> ComputedValue {
+    calc(vec![ComponentValue::PreservedToken(Token::Dimension(
+        Numeric {
+            value: val,
+            is_integer: false,
+        },
+        "px".to_string(),
+    ))])
+}
+
+/// 构造 `calc(<N%>)` 的 Function ComputedValue。
+fn calc_pct(val: f64) -> ComputedValue {
+    calc(vec![ComponentValue::PreservedToken(Token::Percentage(
+        Numeric {
+            value: val,
+            is_integer: false,
+        },
+    ))])
+}
+
 // —— display ——
 
 #[test]
@@ -197,6 +228,61 @@ fn min_max_width_mapped() {
     let style = map_style(Some(&cs));
     assert_eq!(style.min_size.width, Dimension::length(50.0));
     assert_eq!(style.max_size.width, Dimension::length(300.0));
+}
+
+#[test]
+fn width_zero_number_maps_to_length_0() {
+    // P1-8: 裸 0 是合法 <length>（CSS Values L4 §5.1）。
+    // 修复前 width: 0 → AUTO（填满父宽），应映射为 length(0)。
+    let mut cs = ComputedStyle::new();
+    cs.set("width", num(0.0));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.size.width, Dimension::length(0.0));
+}
+
+#[test]
+fn min_width_zero_maps_to_length_0() {
+    // P1-8: min-width: 0 是 flex 收缩最常用的修复，不能落到 AUTO。
+    let mut cs = ComputedStyle::new();
+    cs.set("min-width", num(0.0));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.min_size.width, Dimension::length(0.0));
+}
+
+#[test]
+fn flex_basis_zero_maps_to_length_0() {
+    // P1-8: flex-basis: 0 → length(0)，而非按内容尺寸的 AUTO。
+    let mut cs = ComputedStyle::new();
+    cs.set("flex-basis", num(0.0));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.flex_basis, Dimension::length(0.0));
+}
+
+#[test]
+fn width_calc_percentage_resolves() {
+    // P1-9: calc(50%) 之前静默降级 AUTO，应递归展开取内层百分比。
+    let mut cs = ComputedStyle::new();
+    cs.set("width", calc_pct(50.0));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.size.width, Dimension::percent(0.5));
+}
+
+#[test]
+fn width_calc_px_resolves() {
+    // P1-9: calc(20px) 递归展开取内层 px。
+    let mut cs = ComputedStyle::new();
+    cs.set("width", calc_px(20.0));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.size.width, Dimension::length(20.0));
+}
+
+#[test]
+fn padding_calc_px_resolves() {
+    // P1-9: padding: calc(...) 修复前 → ZERO。
+    let mut cs = ComputedStyle::new();
+    cs.set("padding-top", calc_px(12.0));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.padding.top, LengthPercentage::length(12.0));
 }
 
 // —— margin ——

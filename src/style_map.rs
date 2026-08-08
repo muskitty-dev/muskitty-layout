@@ -312,12 +312,30 @@ fn map_length_percentage(cv: Option<&ComputedValue>) -> LengthPercentage {
 }
 
 /// 从 component value 列表中提取第一个 `px` 长度值。
+///
+/// - P1-8: 顶层裸 `0`（`Token::Number(0)`）是合法 `<length>`（CSS Values
+///   Level 4 §5.1），映射为 `length(0.0)` 而非回退 AUTO。`margin: 0` 等恰好
+///   因 fallback 到 ZERO 碰巧正确，`width: 0` / `min-width: 0` / `flex-basis: 0`
+///   却错误落到 AUTO。
+/// - P1-9: `calc(...)` 在 cascade 中保留为 `Function`，递归展开取内层首个
+///   有效 px（短期方案；长期由 cascade 层做 calc 求值）。
 fn extract_px(cvs: &[ComponentValue]) -> Option<f32> {
     for cv in cvs {
-        if let ComponentValue::PreservedToken(Token::Dimension(numeric, unit)) = cv {
-            if unit.eq_ignore_ascii_case("px") {
+        match cv {
+            ComponentValue::PreservedToken(Token::Dimension(numeric, unit))
+                if unit.eq_ignore_ascii_case("px") =>
+            {
                 return Some(numeric.value as f32);
             }
+            ComponentValue::PreservedToken(Token::Number(n)) if n.value == 0.0 => {
+                return Some(0.0);
+            }
+            ComponentValue::Function(f) => {
+                if let Some(px) = extract_px(&f.value) {
+                    return Some(px);
+                }
+            }
+            _ => {}
         }
     }
     None
@@ -372,10 +390,20 @@ fn extract_gap_pair(cv: &ComputedValue) -> (LengthPercentage, LengthPercentage) 
 }
 
 /// 从 component value 列表中提取第一个百分比值（0.0-100.0）。
+///
+/// P1-9: 同 [`extract_px`]，递归展开 `calc(...)` Function 取内层百分比。
 fn extract_percent(cvs: &[ComponentValue]) -> Option<f32> {
     for cv in cvs {
-        if let ComponentValue::PreservedToken(Token::Percentage(numeric)) = cv {
-            return Some(numeric.value as f32);
+        match cv {
+            ComponentValue::PreservedToken(Token::Percentage(numeric)) => {
+                return Some(numeric.value as f32);
+            }
+            ComponentValue::Function(f) => {
+                if let Some(pct) = extract_percent(&f.value) {
+                    return Some(pct);
+                }
+            }
+            _ => {}
         }
     }
     None
