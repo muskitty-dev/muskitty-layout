@@ -12,13 +12,19 @@ use taffy::NodeId;
 
 /// 单个元素的布局结果。
 ///
-/// 所有坐标均为相对父元素原点的偏移（px）。
+/// `x` / `y` 是相对 taffy 父节点原点的偏移（px）；`abs_x` / `abs_y` 是画布
+/// 坐标系（视口左上角原点）的绝对坐标，由 [`compute_layout`](crate::compute_layout)
+/// 沿 taffy 树自根累加得到（P2-19）。
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct NodeLayout {
-    /// 相对父元素原点的 X 坐标（px）。
+    /// 相对 taffy 父节点原点的 X 坐标（px）。
     pub x: f32,
-    /// 相对父元素原点的 Y 坐标（px）。
+    /// 相对 taffy 父节点原点的 Y 坐标（px）。
     pub y: f32,
+    /// 画布坐标系绝对 X 坐标（px）。
+    pub abs_x: f32,
+    /// 画布坐标系绝对 Y 坐标（px）。
+    pub abs_y: f32,
     /// 计算后的宽度（px）。
     pub width: f32,
     /// 计算后的高度（px）。
@@ -71,6 +77,10 @@ impl From<taffy::TaffyError> for LayoutError {
 /// 整棵布局树的结果集合。
 ///
 /// 通过 DOM 节点指针地址（`usize`）查询对应元素的 [`NodeLayout`]。
+///
+/// key 用 `Rc::as_ptr as usize` 裸地址（PERF-12 降级：未做不透明句柄）。
+/// 已知限制：DOM 树变更后地址可能失效/复用；后续批次应改为不透明句柄
+/// （如每个元素一个稳定 id）或按 [`taffy::NodeId`] 的树形访问。
 #[derive(Debug, Default)]
 pub struct LayoutResult {
     /// DOM 节点指针地址 → 布局结果。

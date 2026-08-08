@@ -35,6 +35,9 @@ pub use tree::LayoutTree;
 use taffy::geometry::Size;
 use taffy::style::AvailableSpace;
 
+use std::collections::HashMap;
+use taffy::NodeId;
+
 /// 计算布局树，返回每个元素的布局结果。
 ///
 /// `viewport_width` / `viewport_height` 为根容器的可用空间（px），
@@ -75,10 +78,41 @@ pub fn compute_layout(
                 NodeLayout {
                     x: layout.location.x,
                     y: layout.location.y,
+                    abs_x: 0.0,
+                    abs_y: 0.0,
                     width: layout.size.width,
                     height: layout.size.height,
                 },
             );
+        }
+
+        // 绝对坐标：自根沿 taffy 树累加偏移（P2-19 / PERF-12）。
+        //
+        // taffy 的 location 相对其 taffy 父节点。`display: contents` /
+        // 非渲染标签 splice 后，DOM 祖先链 ≠ taffy 父链——Renderer 若沿
+        // DOM 祖先累加，未来引入 `position: absolute`（location 相对
+        // containing block）或 transform 时就会双重计数。因此这里直接沿
+        // taffy 树把偏移累加为画布绝对坐标，Renderer 只读 `abs_x`/`abs_y`。
+        let reverse: HashMap<NodeId, usize> =
+            tree.node_map.iter().map(|(&addr, &n)| (n, addr)).collect();
+        // 迭代式 DFS（避免深 DOM 递归溢出）；children 顺序即 DOM 先序。
+        let mut stack: Vec<(NodeId, f32, f32)> = vec![(root, 0.0, 0.0)];
+        while let Some((node_id, parent_abs_x, parent_abs_y)) = stack.pop() {
+            if let Ok(layout) = tree.taffy.layout(node_id) {
+                let abs_x = parent_abs_x + layout.location.x;
+                let abs_y = parent_abs_y + layout.location.y;
+                if let Some(&addr) = reverse.get(&node_id) {
+                    if let Some(entry) = result.nodes.get_mut(&addr) {
+                        entry.abs_x = abs_x;
+                        entry.abs_y = abs_y;
+                    }
+                }
+                if let Ok(children) = tree.taffy.children(node_id) {
+                    for child in children {
+                        stack.push((child, abs_x, abs_y));
+                    }
+                }
+            }
         }
     }
 
