@@ -141,6 +141,90 @@ fn flex_layout_children_positioned() {
     );
 }
 
+// —— flex 简写端到端（B6 解锁） ——
+//
+// `flex` 简写由 cascade 在 collect 阶段展开为 flex-grow/flex-shrink/
+// flex-basis（cascade `d6d7208`），布局层只读长属性。以下测试验证
+// 全链路：CSS `flex: ...` → cascade 展开 → ComputedStyle → taffy 布局。
+// 修复前 `flex` 未注册、被 normalize 丢弃，item 无 grow → 空 item 0px。
+
+#[test]
+fn flex_shorthand_equal_grow_end_to_end() {
+    // flex: 1 → grow 1, shrink 1, basis 0%（CSS Flexbox §7.2.1：省略项用简写默认值）。
+    // 两个空 item 在 600px 容器中各占 300px。
+    let html = "<div id='container'><div class='item'></div><div class='item'></div></div>";
+    let css = "#container { display: flex; width: 600px; } .item { flex: 1; }";
+    let result = full_pipeline(html, css, 800.0, 600.0);
+
+    let container = find_by_id(&result.dom, "container").expect("container");
+    let items = element_children(&result.dom, container);
+    assert_eq!(items.len(), 2, "should have 2 items");
+
+    let i1 = result.layout.get(items[0]).expect("item1 layout");
+    let i2 = result.layout.get(items[1]).expect("item2 layout");
+    assert!(
+        (i1.width - 300.0).abs() < 1.0,
+        "item1 ~300px (600/2), got {}",
+        i1.width
+    );
+    assert!(
+        (i2.width - 300.0).abs() < 1.0,
+        "item2 ~300px (600/2), got {}",
+        i2.width
+    );
+    assert!(
+        (i2.x - (i1.x + i1.width)).abs() < 1.0,
+        "item2 adjacent: x {} ~ item1.x {} + width {}",
+        i2.x,
+        i1.x,
+        i1.width
+    );
+}
+
+#[test]
+fn flex_shorthand_grow_ratio_end_to_end() {
+    // flex: 1 与 flex: 3 → 600px 按 1:3 分 = 150px / 450px。
+    let html = "<div id='container'><div class='a'></div><div class='b'></div></div>";
+    let css = "#container { display: flex; width: 600px; } .a { flex: 1; } .b { flex: 3; }";
+    let result = full_pipeline(html, css, 800.0, 600.0);
+
+    let container = find_by_id(&result.dom, "container").expect("container");
+    let items = element_children(&result.dom, container);
+    assert_eq!(items.len(), 2, "should have 2 items");
+
+    let a = result.layout.get(items[0]).expect("item a layout");
+    let b = result.layout.get(items[1]).expect("item b layout");
+    assert!(
+        (a.width - 150.0).abs() < 1.0,
+        "flex:1 item ~150px (600/4), got {}",
+        a.width
+    );
+    assert!(
+        (b.width - 450.0).abs() < 1.0,
+        "flex:3 item ~450px (600*3/4), got {}",
+        b.width
+    );
+}
+
+#[test]
+fn flex_shorthand_fixed_basis_end_to_end() {
+    // flex: 0 0 100px → grow 0, shrink 0, basis 100px：恒 100px，不参与分配。
+    let html = "<div id='container'><div class='item'></div></div>";
+    let css = "#container { display: flex; width: 600px; } .item { flex: 0 0 100px; }";
+    let result = full_pipeline(html, css, 800.0, 600.0);
+
+    let container = find_by_id(&result.dom, "container").expect("container");
+    let items = element_children(&result.dom, container);
+    assert_eq!(items.len(), 1, "should have 1 item");
+
+    let i1 = result.layout.get(items[0]).expect("item layout");
+    assert!(
+        (i1.width - 100.0).abs() < 1.0,
+        "flex: 0 0 100px item ~100px, got {}",
+        i1.width
+    );
+}
+
 #[test]
 fn percentage_width_resolved() {
     let result = full_pipeline("<div style='width: 50%'></div>", "", 800.0, 600.0);
@@ -237,6 +321,44 @@ fn find_element_by_tag(node: &Rc<RefCell<Node>>, tag: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// 递归查找第一个 `id` 属性匹配的 Element 地址。
+fn find_by_id(node: &Rc<RefCell<Node>>, id: &str) -> Option<usize> {
+    {
+        let borrowed = node.borrow();
+        if let NodeKind::Element(elem) = &borrowed.kind {
+            if elem.get_attribute("id") == Some(id) {
+                return Some(Rc::as_ptr(node) as usize);
+            }
+        }
+    }
+    for child in node.borrow().child_nodes() {
+        if let Some(addr) = find_by_id(child, id) {
+            return Some(addr);
+        }
+    }
+    None
+}
+
+/// 返回指定 Element 节点的直接 Element 子节点地址（文档序）。
+fn element_children(node: &Rc<RefCell<Node>>, parent: usize) -> Vec<usize> {
+    fn walk(n: &Rc<RefCell<Node>>, parent: usize, out: &mut Vec<usize>) {
+        if Rc::as_ptr(n) as usize == parent {
+            for child in n.borrow().child_nodes() {
+                if let NodeKind::Element(_) = &child.borrow().kind {
+                    out.push(Rc::as_ptr(child) as usize);
+                }
+            }
+            return;
+        }
+        for child in n.borrow().child_nodes() {
+            walk(child, parent, out);
+        }
+    }
+    let mut out = vec![];
+    walk(node, parent, &mut out);
+    out
 }
 
 /// 查找第一个有 Element 子节点的指定标签名元素及其子地址列表。
