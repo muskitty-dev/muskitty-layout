@@ -54,13 +54,16 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
     //   需在 build_layout_tree 中特殊处理，当前先当 Block）
     // - `list-item` → Block（TODO: 需额外处理 marker box，当前当 Block）
     if let Some(kw) = get_keyword(cs, "display") {
-        style.display = match kw.to_ascii_lowercase().as_str() {
-            "flex" | "inline-flex" => Display::Flex,
-            "grid" | "inline-grid" => Display::Grid,
-            "block" | "flow" | "flow-root" | "inline" | "inline-block" | "contents"
-            | "list-item" => Display::Block,
-            "none" => Display::None,
-            _ => Display::Block,
+        style.display = if kw_eq(kw, "flex") || kw_eq(kw, "inline-flex") {
+            Display::Flex
+        } else if kw_eq(kw, "grid") || kw_eq(kw, "inline-grid") {
+            Display::Grid
+        } else if kw_eq(kw, "none") {
+            Display::None
+        } else {
+            // block / flow / flow-root / inline / inline-block / contents / list-item
+            // 及未知关键字 → Block（见函数头注释）
+            Display::Block
         };
     }
 
@@ -106,55 +109,61 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
     // CSS Box Model Level 3 §4.1: 初始值为 content-box.
     // 未知值按 §7.1 回退到初始值（ContentBox），而非 taffy 默认的 BorderBox.
     if let Some(kw) = get_keyword(cs, "box-sizing") {
-        style.box_sizing = match kw.to_ascii_lowercase().as_str() {
-            "content-box" => BoxSizing::ContentBox,
-            "border-box" => BoxSizing::BorderBox,
-            _ => BoxSizing::ContentBox,
+        style.box_sizing = if kw_eq(kw, "border-box") {
+            BoxSizing::BorderBox
+        } else {
+            // content-box 及未知值 → ContentBox（§7.1 回退初始值）
+            BoxSizing::ContentBox
         };
     }
 
     // —— flex-direction ——
     if let Some(kw) = get_keyword(cs, "flex-direction") {
-        style.flex_direction = match kw.to_ascii_lowercase().as_str() {
-            "row" => FlexDirection::Row,
-            "row-reverse" => FlexDirection::RowReverse,
-            "column" => FlexDirection::Column,
-            "column-reverse" => FlexDirection::ColumnReverse,
-            _ => FlexDirection::Row,
+        style.flex_direction = if kw_eq(kw, "row-reverse") {
+            FlexDirection::RowReverse
+        } else if kw_eq(kw, "column") {
+            FlexDirection::Column
+        } else if kw_eq(kw, "column-reverse") {
+            FlexDirection::ColumnReverse
+        } else {
+            // row 及未知值 → Row
+            FlexDirection::Row
         };
     }
 
     // —— flex-wrap ——
     if let Some(kw) = get_keyword(cs, "flex-wrap") {
-        style.flex_wrap = match kw.to_ascii_lowercase().as_str() {
-            "nowrap" => FlexWrap::NoWrap,
-            "wrap" => FlexWrap::Wrap,
-            "wrap-reverse" => FlexWrap::WrapReverse,
-            _ => FlexWrap::NoWrap,
+        style.flex_wrap = if kw_eq(kw, "wrap") {
+            FlexWrap::Wrap
+        } else if kw_eq(kw, "wrap-reverse") {
+            FlexWrap::WrapReverse
+        } else {
+            // nowrap 及未知值 → NoWrap
+            FlexWrap::NoWrap
         };
     }
 
     // —— justify-content ——
     if let Some(kw) = get_keyword(cs, "justify-content") {
-        style.justify_content = map_justify_content(&kw.to_ascii_lowercase());
+        style.justify_content = map_justify_content(kw);
     }
 
     // —— align-content ——
     // CSS Box Alignment Level 3 §8.1: 多行 flex 容器的交叉轴行分布。
     if let Some(kw) = get_keyword(cs, "align-content") {
-        style.align_content = map_align_content(&kw.to_ascii_lowercase());
+        style.align_content = map_align_content(kw);
     }
 
     // —— align-items ——
     if let Some(kw) = get_keyword(cs, "align-items") {
-        style.align_items = map_align_items(&kw.to_ascii_lowercase());
+        style.align_items = map_align_items(kw);
     }
 
     // —— align-self ——
     if let Some(kw) = get_keyword(cs, "align-self") {
         // align-self: auto 表示继承父元素的 align-items，用 None 表示回退。
-        if !kw.eq_ignore_ascii_case("auto") {
-            style.align_self = map_align_items(&kw.to_ascii_lowercase());
+        if !kw_eq(kw, "auto") {
+            style.align_self = map_align_items(kw);
         }
     }
 
@@ -199,14 +208,22 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
 
 // —— 辅助函数 ——
 
-/// 从 ComputedStyle 中读取指定属性的关键字值（小写化由调用方决定）。
+/// 从 ComputedStyle 中读取指定属性的关键字值。
 ///
 /// 单态化（P2-20）后关键字即首个 Ident token，直接退化到
 /// [`ComputedValue::keyword`]（defaulting 初始值与 cascade pipeline
-/// 产物统一处理）。
-fn get_keyword(cs: &ComputedStyle, name: &str) -> Option<String> {
-    cs.get(name)
-        .and_then(|cv| cv.keyword().map(|s| s.to_string()))
+/// 产物统一处理）。返回借用（零分配，PERF-10），调用方用
+/// `eq_ignore_ascii_case` 比较（`kw_eq`）。
+fn get_keyword<'a>(cs: &'a ComputedStyle, name: &str) -> Option<&'a str> {
+    cs.get(name).and_then(|cv| cv.keyword())
+}
+
+/// 关键字大小写不敏感比较（CSS 关键字均为 ASCII）。
+///
+/// PERF-10：替代 `to_ascii_lowercase()` 的临时分配，与 [`get_keyword`]
+/// 的借用返回配合实现 map_style 每属性零分配。
+fn kw_eq(s: &str, expected: &str) -> bool {
+    s.eq_ignore_ascii_case(expected)
 }
 
 /// `justify-content` 关键字 → [`JustifyContent`]。
@@ -219,12 +236,16 @@ fn get_keyword(cs: &ComputedStyle, name: &str) -> Option<String> {
 /// 让 taffy 默认值生效（P2-10）。
 fn map_justify_content(kw: &str) -> Option<JustifyContent> {
     Some(match kw {
-        "flex-start" | "start" | "left" => JustifyContent::FLEX_START,
-        "center" => JustifyContent::CENTER,
-        "flex-end" | "end" | "right" => JustifyContent::FLEX_END,
-        "space-between" => JustifyContent::SPACE_BETWEEN,
-        "space-around" => JustifyContent::SPACE_AROUND,
-        "space-evenly" => JustifyContent::SPACE_EVENLY,
+        _ if kw_eq(kw, "flex-start") || kw_eq(kw, "start") || kw_eq(kw, "left") => {
+            JustifyContent::FLEX_START
+        }
+        _ if kw_eq(kw, "center") => JustifyContent::CENTER,
+        _ if kw_eq(kw, "flex-end") || kw_eq(kw, "end") || kw_eq(kw, "right") => {
+            JustifyContent::FLEX_END
+        }
+        _ if kw_eq(kw, "space-between") => JustifyContent::SPACE_BETWEEN,
+        _ if kw_eq(kw, "space-around") => JustifyContent::SPACE_AROUND,
+        _ if kw_eq(kw, "space-evenly") => JustifyContent::SPACE_EVENLY,
         _ => return None,
     })
 }
@@ -238,13 +259,13 @@ fn map_justify_content(kw: &str) -> Option<JustifyContent> {
 /// 生效（P2-11）。
 fn map_align_content(kw: &str) -> Option<AlignContent> {
     Some(match kw {
-        "stretch" => AlignContent::STRETCH,
-        "flex-start" | "start" => AlignContent::FLEX_START,
-        "center" => AlignContent::CENTER,
-        "flex-end" | "end" => AlignContent::FLEX_END,
-        "space-between" => AlignContent::SPACE_BETWEEN,
-        "space-around" => AlignContent::SPACE_AROUND,
-        "space-evenly" => AlignContent::SPACE_EVENLY,
+        _ if kw_eq(kw, "stretch") => AlignContent::STRETCH,
+        _ if kw_eq(kw, "flex-start") || kw_eq(kw, "start") => AlignContent::FLEX_START,
+        _ if kw_eq(kw, "center") => AlignContent::CENTER,
+        _ if kw_eq(kw, "flex-end") || kw_eq(kw, "end") => AlignContent::FLEX_END,
+        _ if kw_eq(kw, "space-between") => AlignContent::SPACE_BETWEEN,
+        _ if kw_eq(kw, "space-around") => AlignContent::SPACE_AROUND,
+        _ if kw_eq(kw, "space-evenly") => AlignContent::SPACE_EVENLY,
         _ => return None,
     })
 }
@@ -261,11 +282,11 @@ fn map_align_content(kw: &str) -> Option<AlignContent> {
 /// - CSS Flexbox §8.3: `start` 对齐到 cross-axis 起始端，等价于 `flex-start`。
 fn map_align_items(kw: &str) -> Option<AlignItems> {
     Some(match kw {
-        "stretch" => AlignItems::STRETCH,
-        "flex-start" | "start" => AlignItems::FLEX_START,
-        "center" => AlignItems::CENTER,
-        "flex-end" | "end" => AlignItems::FLEX_END,
-        "baseline" => AlignItems::BASELINE,
+        _ if kw_eq(kw, "stretch") => AlignItems::STRETCH,
+        _ if kw_eq(kw, "flex-start") || kw_eq(kw, "start") => AlignItems::FLEX_START,
+        _ if kw_eq(kw, "center") => AlignItems::CENTER,
+        _ if kw_eq(kw, "flex-end") || kw_eq(kw, "end") => AlignItems::FLEX_END,
+        _ if kw_eq(kw, "baseline") => AlignItems::BASELINE,
         // normal（→ stretch）与未知值统一返回 None，交给 taffy 默认值。
         _ => return None,
     })

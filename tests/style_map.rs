@@ -162,6 +162,26 @@ fn no_computed_style_defaults_to_block() {
     assert_eq!(style.display, Display::Block);
 }
 
+#[test]
+fn keywords_match_case_insensitively() {
+    // PERF-10: get_keyword 返回借用 &str，比较走 kw_eq（eq_ignore_ascii_case）。
+    // 大写关键字与全小写等价，行为与重构前 to_ascii_lowercase 一致。
+    let mut cs = ComputedStyle::new();
+    cs.set("display", kw("FLEX"));
+    cs.set("box-sizing", kw("BORDER-BOX"));
+    cs.set("flex-direction", kw("COLUMN"));
+    cs.set("flex-wrap", kw("WRAP"));
+    cs.set("justify-content", kw("CENTER"));
+    cs.set("align-items", kw("STRETCH"));
+    let style = map_style(Some(&cs));
+    assert_eq!(style.display, Display::Flex);
+    assert_eq!(style.box_sizing, BoxSizing::BorderBox);
+    assert_eq!(style.flex_direction, FlexDirection::Column);
+    assert_eq!(style.flex_wrap, FlexWrap::Wrap);
+    assert_eq!(style.justify_content, Some(JustifyContent::CENTER));
+    assert_eq!(style.align_items, Some(AlignItems::STRETCH));
+}
+
 // —— width / height ——
 
 #[test]
