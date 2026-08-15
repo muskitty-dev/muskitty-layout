@@ -15,9 +15,9 @@ use muskitty_css::tokenizer::Token;
 use taffy::geometry::Rect;
 use taffy::style::{
     AlignContent, AlignItems, BoxSizing, Dimension, Display, FlexDirection, FlexWrap,
-    JustifyContent, LengthPercentage, LengthPercentageAuto, Position, Style,
+    GridTemplateComponent, JustifyContent, LengthPercentage, LengthPercentageAuto, Position, Style,
 };
-use taffy::style_helpers::{TaffyAuto, TaffyZero};
+use taffy::style_helpers::{fr, length, percent, TaffyAuto, TaffyZero};
 
 /// 将 [`ComputedStyle`] 映射为 taffy [`Style`]。
 ///
@@ -225,6 +225,14 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
     }
     if let Some(cv) = cs.get("row-gap") {
         style.gap.height = map_length_percentage(Some(cv));
+    }
+
+    // —— grid-template-columns / rows（CSS Grid Layout Level 1 §7）——
+    if let Some(cv) = cs.get("grid-template-columns") {
+        style.grid_template_columns = map_grid_template(cv);
+    }
+    if let Some(cv) = cs.get("grid-template-rows") {
+        style.grid_template_rows = map_grid_template(cv);
     }
 
     style
@@ -439,4 +447,30 @@ fn extract_number_from_cv(cv: &ComputedValue) -> Option<f32> {
         }
     }
     None
+}
+
+/// 将 `grid-template-columns/rows` 的 component value 列表解析为 taffy track 列表。
+///
+/// 支持 `fr` / `px` / `%` / `auto` 单 track（`repeat()` 与命名线推迟，L-3）。
+fn map_grid_template(cv: &ComputedValue) -> Vec<GridTemplateComponent<String>> {
+    let mut tracks = Vec::new();
+    for token in cv.tokens() {
+        match token {
+            ComponentValue::PreservedToken(Token::Dimension(numeric, unit)) => {
+                if unit.eq_ignore_ascii_case("fr") {
+                    tracks.push(fr(numeric.value as f32));
+                } else if unit.eq_ignore_ascii_case("px") {
+                    tracks.push(length(numeric.value as f32));
+                }
+            }
+            ComponentValue::PreservedToken(Token::Percentage(numeric)) => {
+                tracks.push(percent(numeric.value as f32));
+            }
+            ComponentValue::PreservedToken(Token::Ident(s)) if s.eq_ignore_ascii_case("auto") => {
+                tracks.push(GridTemplateComponent::AUTO);
+            }
+            _ => {}
+        }
+    }
+    tracks
 }
