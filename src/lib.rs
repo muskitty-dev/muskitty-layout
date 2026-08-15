@@ -26,6 +26,7 @@
 pub mod convert;
 pub mod result;
 pub mod style_map;
+pub mod text;
 pub mod tree;
 
 pub use convert::build_layout_tree;

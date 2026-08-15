@@ -47,17 +47,50 @@ fn nested_elements_build_tree() {
 }
 
 #[test]
-fn text_nodes_skipped() {
-    // div > "hello"
+fn text_node_creates_leaf() {
+    // div > "hello"（T-1：text 节点测量为固定尺寸 leaf，而非跳过）
     let doc = Node::new_document();
     let root = make_element("div", &doc);
     let text = Node::new_text("hello", &doc);
+    let text_addr = Rc::as_ptr(&text) as usize;
     append_child(&root, text).unwrap();
 
     let styles: HashMap<usize, ComputedStyle> = HashMap::new();
     let tree = build_layout_tree(&root, &styles);
 
-    assert_eq!(tree.node_map.len(), 1, "Text 节点不应创建布局节点");
+    assert_eq!(tree.node_map.len(), 2, "div + text 应产生 2 个布局节点");
+    assert!(
+        tree.node_map.contains_key(&text_addr),
+        "Text 节点应创建布局 leaf"
+    );
+}
+
+#[test]
+fn text_measurement_produces_nonzero_size() {
+    // T-1: text 节点测量为 leaf 后，布局结果应有正宽高。
+    use muskitty_layout::compute_layout;
+    let doc = Node::new_document();
+    let root = make_element("div", &doc);
+    let text = Node::new_text("Hello World", &doc);
+    let text_addr = Rc::as_ptr(&text) as usize;
+    append_child(&root, text).unwrap();
+
+    let styles: HashMap<usize, ComputedStyle> = HashMap::new();
+    let mut tree = build_layout_tree(&root, &styles);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout should succeed");
+    let layout = result
+        .get(text_addr)
+        .expect("text node should be in layout result");
+    assert!(
+        layout.width > 0.0,
+        "text width should be measured positive, got {}",
+        layout.width
+    );
+    assert!(
+        layout.height > 0.0,
+        "text height should be measured positive, got {}",
+        layout.height
+    );
 }
 
 #[test]
