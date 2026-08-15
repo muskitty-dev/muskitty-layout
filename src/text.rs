@@ -14,13 +14,13 @@ use muskitty_css::parser::ComponentValue;
 use muskitty_css::tokenizer::Token;
 
 /// 浏览器默认 font-size（px）。CSS `medium` = 16px。
-pub const DEFAULT_FONT_SIZE: f32 = 16.0;
+pub(crate) const DEFAULT_FONT_SIZE: f32 = 16.0;
 
 /// 测量单行文本的自然尺寸（不换行）。
 ///
 /// 返回 `(width, height)`（px）。行高按 `font_size * 1.2` 近似（CSS `normal`
 /// 行高的简化），精确 line-height 解析推迟。
-pub fn measure_text(text: &str, font_size: f32, font_system: &mut FontSystem) -> (f32, f32) {
+pub(crate) fn measure_text(text: &str, font_size: f32, font_system: &mut FontSystem) -> (f32, f32) {
     let line_height = font_size * 1.2;
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
     // 单行：不设宽度上限（不触发换行）。
@@ -42,7 +42,7 @@ pub fn measure_text(text: &str, font_size: f32, font_system: &mut FontSystem) ->
 /// cascade 已把 font-size 归一化为 px Dimension（`normalize_font_size`），
 /// 此处直接解析 `Token::Dimension(_, "px")`。无法解析时返回 `None`
 /// （调用方回退到继承的 font-size 或 [`DEFAULT_FONT_SIZE`]）。
-pub fn resolve_font_size(style: &ComputedStyle) -> Option<f32> {
+pub(crate) fn resolve_font_size(style: &ComputedStyle) -> Option<f32> {
     let cv = style.get("font-size")?;
     for v in cv.tokens() {
         if let ComponentValue::PreservedToken(Token::Dimension(numeric, unit)) = v {

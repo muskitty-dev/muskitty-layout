@@ -23,8 +23,8 @@ fn single_element_builds_one_node() {
     let styles: HashMap<usize, ComputedStyle> = HashMap::new();
     let tree = build_layout_tree(&root, &styles);
 
-    assert!(tree.root.is_some(), "根节点应被创建");
-    assert_eq!(tree.node_map.len(), 1, "单个元素应映射到 1 个布局节点");
+    assert!(tree.has_root(), "根节点应被创建");
+    assert_eq!(tree.node_count(), 1, "单个元素应映射到 1 个布局节点");
 }
 
 #[test]
@@ -40,10 +40,10 @@ fn nested_elements_build_tree() {
     let styles: HashMap<usize, ComputedStyle> = HashMap::new();
     let tree = build_layout_tree(&root, &styles);
 
-    assert_eq!(tree.node_map.len(), 3, "三层嵌套应产生 3 个布局节点");
-    assert!(tree.node_map.contains_key(&(Rc::as_ptr(&root) as usize)));
-    assert!(tree.node_map.contains_key(&(Rc::as_ptr(&p) as usize)));
-    assert!(tree.node_map.contains_key(&(Rc::as_ptr(&span) as usize)));
+    assert_eq!(tree.node_count(), 3, "三层嵌套应产生 3 个布局节点");
+    assert!(tree.contains_node(Rc::as_ptr(&root) as usize));
+    assert!(tree.contains_node(Rc::as_ptr(&p) as usize));
+    assert!(tree.contains_node(Rc::as_ptr(&span) as usize));
 }
 
 #[test]
@@ -58,11 +58,8 @@ fn text_node_creates_leaf() {
     let styles: HashMap<usize, ComputedStyle> = HashMap::new();
     let tree = build_layout_tree(&root, &styles);
 
-    assert_eq!(tree.node_map.len(), 2, "div + text 应产生 2 个布局节点");
-    assert!(
-        tree.node_map.contains_key(&text_addr),
-        "Text 节点应创建布局 leaf"
-    );
+    assert_eq!(tree.node_count(), 2, "div + text 应产生 2 个布局节点");
+    assert!(tree.contains_node(text_addr), "Text 节点应创建布局 leaf");
 }
 
 #[test]
@@ -109,9 +106,9 @@ fn display_none_excluded() {
 
     let tree = build_layout_tree(&root, &styles);
 
-    assert_eq!(tree.node_map.len(), 1, "display:none 的 p 应被排除");
+    assert_eq!(tree.node_count(), 1, "display:none 的 p 应被排除");
     assert!(
-        !tree.node_map.contains_key(&p_addr),
+        !tree.contains_node(p_addr),
         "p 的地址不应出现在 node_map 中"
     );
 }
@@ -135,9 +132,9 @@ fn display_none_excludes_entire_subtree() {
 
     let tree = build_layout_tree(&root, &styles);
 
-    assert_eq!(tree.node_map.len(), 1, "display:none 的整个子树应被排除");
-    assert!(!tree.node_map.contains_key(&(Rc::as_ptr(&span) as usize)));
-    assert!(!tree.node_map.contains_key(&(Rc::as_ptr(&em) as usize)));
+    assert_eq!(tree.node_count(), 1, "display:none 的整个子树应被排除");
+    assert!(!tree.contains_node(Rc::as_ptr(&span) as usize));
+    assert!(!tree.contains_node(Rc::as_ptr(&em) as usize));
 }
 
 #[test]
@@ -147,8 +144,8 @@ fn empty_dom_produces_empty_tree() {
     let styles: HashMap<usize, ComputedStyle> = HashMap::new();
     let tree = build_layout_tree(&doc, &styles);
 
-    assert!(tree.root.is_none(), "Document 节点不应产生布局根");
-    assert_eq!(tree.node_map.len(), 0);
+    assert!(!tree.has_root(), "Document 节点不应产生布局根");
+    assert_eq!(tree.node_count(), 0);
 }
 
 #[test]
@@ -174,16 +171,14 @@ fn display_contents_element_produces_no_box_but_children_do() {
     let tree = build_layout_tree(&root, &styles);
 
     assert!(
-        !tree.node_map.contains_key(&p_addr),
+        !tree.contains_node(p_addr),
         "display:contents 元素不应生成盒"
     );
     let root_addr = Rc::as_ptr(&root) as usize;
-    assert!(tree.node_map.contains_key(&root_addr));
-    assert!(tree.node_map.contains_key(&span_addr));
-    let root_id = tree.node_map[&root_addr];
-    let span_id = tree.node_map[&span_addr];
+    assert!(tree.contains_node(root_addr));
+    assert!(tree.contains_node(span_addr));
     assert!(
-        tree.taffy.children(root_id).unwrap().contains(&span_id),
+        tree.has_child(root_addr, span_addr),
         "display:contents 的子元素应 splice 为祖父的直接子盒"
     );
 }
@@ -203,11 +198,11 @@ fn non_rendered_tags_produce_no_boxes() {
     let styles: HashMap<usize, ComputedStyle> = HashMap::new();
     let tree = build_layout_tree(&root, &styles);
 
-    assert_eq!(tree.node_map.len(), 1, "仅 html 生成盒");
-    assert!(tree.node_map.contains_key(&(Rc::as_ptr(&root) as usize)));
-    assert!(!tree.node_map.contains_key(&(Rc::as_ptr(&head) as usize)));
-    assert!(!tree.node_map.contains_key(&(Rc::as_ptr(&title) as usize)));
-    assert!(!tree.node_map.contains_key(&(Rc::as_ptr(&script) as usize)));
+    assert_eq!(tree.node_count(), 1, "仅 html 生成盒");
+    assert!(tree.contains_node(Rc::as_ptr(&root) as usize));
+    assert!(!tree.contains_node(Rc::as_ptr(&head) as usize));
+    assert!(!tree.contains_node(Rc::as_ptr(&title) as usize));
+    assert!(!tree.contains_node(Rc::as_ptr(&script) as usize));
 }
 
 #[test]
@@ -229,16 +224,14 @@ fn contents_element_skips_its_own_display_but_descendants_render() {
 
     let tree = build_layout_tree(&root, &styles);
 
-    assert!(!tree.node_map.contains_key(&p_addr));
+    assert!(!tree.contains_node(p_addr));
     let inner_addr = Rc::as_ptr(&inner) as usize;
     assert!(
-        tree.node_map.contains_key(&inner_addr),
+        tree.contains_node(inner_addr),
         "contents 的子孙应照常生成盒"
     );
-    let root_id = tree.node_map[&(Rc::as_ptr(&root) as usize)];
-    let inner_id = tree.node_map[&inner_addr];
     assert!(
-        tree.taffy.children(root_id).unwrap().contains(&inner_id),
+        tree.has_child(Rc::as_ptr(&root) as usize, inner_addr),
         "contents 的子子孙应 splice 进祖父 children"
     );
 }

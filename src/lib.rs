@@ -23,11 +23,11 @@
 //! - CSS Flexbox Level 1: flex container/item
 //! - CSS Grid Level 2: grid container/item
 
-pub mod convert;
+pub(crate) mod convert;
 pub mod result;
-pub mod style_map;
-pub mod text;
-pub mod tree;
+pub(crate) mod style_map;
+pub(crate) mod text;
+pub(crate) mod tree;
 
 pub use convert::build_layout_tree;
 pub use result::{LayoutError, LayoutResult, NodeLayout};

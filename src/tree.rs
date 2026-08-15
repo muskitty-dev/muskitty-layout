@@ -26,11 +26,11 @@ use taffy::TaffyTree;
 /// 元素一个稳定 id 的不透明句柄。
 pub struct LayoutTree {
     /// taffy 的内部节点树（默认 context 类型为 `()`）。
-    pub taffy: TaffyTree,
+    pub(crate) taffy: TaffyTree,
     /// DOM 节点指针地址 → taffy NodeId 映射。
-    pub node_map: HashMap<usize, NodeId>,
+    pub(crate) node_map: HashMap<usize, NodeId>,
     /// 根节点 ID（若 DOM 根为 Element 且未 display:none 则有值）。
-    pub root: Option<NodeId>,
+    pub(crate) root: Option<NodeId>,
 }
 
 impl LayoutTree {
@@ -43,16 +43,36 @@ impl LayoutTree {
         }
     }
 
-    /// 更新某 DOM 节点对应 taffy 节点的样式。
-    ///
-    /// PERF-9（降级）：暴露增量更新的入口，供未来复用 [`TaffyTree`] +
-    /// `set_style` + 局部 relayout 的增量路径。当前 one-shot pipeline 每帧
-    /// 重建整棵布局树，无消费方。样式请用 [`crate::style_map::map_style`] 生成。
-    ///
-    /// 返回 `None`：addr 不在 node_map 中，或 taffy 内部更新失败。
-    pub fn set_style(&mut self, addr: usize, style: taffy::style::Style) -> Option<()> {
-        let node = self.node_map.get(&addr)?;
-        self.taffy.set_style(*node, style).ok()
+    // —— #[doc(hidden)] 测试辅助：对外只暴露抽象行为，隐藏 taffy 类型 ——
+
+    /// 是否有根节点。
+    #[doc(hidden)]
+    pub fn has_root(&self) -> bool {
+        self.root.is_some()
+    }
+
+    /// 布局节点数量。
+    #[doc(hidden)]
+    pub fn node_count(&self) -> usize {
+        self.node_map.len()
+    }
+
+    /// 某 DOM 地址是否在布局树中。
+    #[doc(hidden)]
+    pub fn contains_node(&self, addr: usize) -> bool {
+        self.node_map.contains_key(&addr)
+    }
+
+    /// `parent` 是否为 `child` 的 taffy 父节点（验证 contents splice 等）。
+    #[doc(hidden)]
+    pub fn has_child(&self, parent: usize, child: usize) -> bool {
+        let (Some(&p), Some(&c)) = (self.node_map.get(&parent), self.node_map.get(&child)) else {
+            return false;
+        };
+        self.taffy
+            .children(p)
+            .map(|cs| cs.contains(&c))
+            .unwrap_or(false)
     }
 }
 
