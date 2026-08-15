@@ -15,7 +15,7 @@ use muskitty_css::tokenizer::Token;
 use taffy::geometry::Rect;
 use taffy::style::{
     AlignContent, AlignItems, BoxSizing, Dimension, Display, FlexDirection, FlexWrap,
-    JustifyContent, LengthPercentage, LengthPercentageAuto, Style,
+    JustifyContent, LengthPercentage, LengthPercentageAuto, Position, Style,
 };
 use taffy::style_helpers::{TaffyAuto, TaffyZero};
 
@@ -66,6 +66,30 @@ pub fn map_style(computed: Option<&ComputedStyle>) -> Style {
             Display::Block
         };
     }
+
+    // —— position ——
+    // CSS Positioned Layout Level 3 §2: position 属性。
+    //
+    // taffy 0.12 仅 Relative/Absolute（无 Fixed）。`fixed` 近似映射为
+    // Absolute：taffy 的 absolute 元素相对 closest positioned ancestor
+    // （无则相对 origin），在无 positioned ancestor 时等价于 viewport 定位。
+    if let Some(kw) = get_keyword(cs, "position") {
+        style.position = if kw_eq(kw, "absolute") || kw_eq(kw, "fixed") {
+            Position::Absolute
+        } else {
+            // static / relative / sticky / 未知 → Relative（static 默认无偏移）
+            Position::Relative
+        };
+    }
+
+    // —— top / right / bottom / left（inset）——
+    // CSS Positioned Layout Level 3 §4: 偏移属性。auto = 不偏移。
+    style.inset = Rect {
+        top: map_length_percentage_auto(cs.get("top")),
+        right: map_length_percentage_auto(cs.get("right")),
+        bottom: map_length_percentage_auto(cs.get("bottom")),
+        left: map_length_percentage_auto(cs.get("left")),
+    };
 
     // —— width / height ——
     if let Some(cv) = cs.get("width") {

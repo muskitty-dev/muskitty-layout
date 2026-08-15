@@ -51,14 +51,21 @@ pub fn build_layout_tree(root: &Rc<RefCell<Node>>, styles: &StyleMap) -> LayoutT
         // 每棵布局树构建时创建一次 FontSystem（扫描系统字体），复用给所有
         // text 测量（T-1）。
         let mut font_system = FontSystem::new();
-        let roots = build_node_recursive(
+        let built = build_node_recursive(
             &mut tree,
             &root_el,
             styles,
             &mut font_system,
             DEFAULT_FONT_SIZE,
         );
-        tree.root = roots.first().copied();
+        tree.root = built.in_flow.first().copied();
+        // 子树内无 positioned ancestor 的 absolute box 挂到根盒（html），
+        // taffy 相对根定位 = 相对 viewport origin（L-1）。
+        if let Some(root_id) = tree.root {
+            for abs in &built.absolute {
+                tree.taffy.add_child(root_id, *abs).ok();
+            }
+        }
     }
     tree
 }
@@ -79,21 +86,33 @@ fn find_root_element(node: &Rc<RefCell<Node>>) -> Option<Rc<RefCell<Node>>> {
     None
 }
 
+/// 构建结果：区分正常流 box 与待挂载的 absolute box。
+///
+/// absolute 元素从 normal flow 移除，其 box 通过返回值上传到最近
+/// positioned ancestor 挂载（CSS Positioned Layout Level 3 §3: containing block）。
+#[derive(Default)]
+struct Built {
+    /// 正常流 box（作为 DOM 父节点的 taffy 子节点）。
+    in_flow: Vec<NodeId>,
+    /// absolute box（挂到最近 positioned ancestor）。
+    absolute: Vec<NodeId>,
+}
+
 /// 递归为 DOM 子树构建 taffy 节点。
 ///
-/// 返回该 DOM 子树生成的所有 taffy box：
-/// - Text 节点 → 测量为固定尺寸 leaf，返回 `[id]`（T-1）。
-/// - Comment / Document 等非元素 / `display: none` / 非渲染标签 → 空（不生成盒）。
-/// - `display: contents` → 元素不生成盒，其子元素直接参与祖父格式上下文，
-///   返回子元素生成的 box（P2-12）。
-/// - 普通元素 → 生成一个盒，返回 `[id]`。
+/// 返回 [`Built`]：
+/// - Text 节点 → 测量为固定尺寸 leaf（T-1）。
+/// - Comment / Document 等非元素 / `display: none` / 非渲染标签 → 空。
+/// - `display: contents` → 元素不生成盒，子 in_flow box 上浮（P2-12）。
+/// - 普通元素 → 生成一个盒；`position: absolute/fixed` 的盒进入 `absolute`
+///   列表，由最近 positioned ancestor 挂载（L-1）。
 fn build_node_recursive(
     tree: &mut LayoutTree,
     node: &Rc<RefCell<Node>>,
     styles: &StyleMap,
     font_system: &mut FontSystem,
     inherited_font_size: f32,
-) -> Vec<NodeId> {
+) -> Built {
     // —— Text 节点：测量为固定尺寸的 taffy leaf（T-1，单行不换行）——
     // Text 是叶子，无子递归，可在持有 borrow 时直接测量（font_system 是
     // 独立参数，与 node 借用不冲突）。
@@ -113,19 +132,22 @@ fn build_node_recursive(
                 })
                 .expect("taffy new_leaf 失败：无法创建文本叶子节点");
             tree.node_map.insert(addr, leaf);
-            return vec![leaf];
+            return Built {
+                in_flow: vec![leaf],
+                absolute: vec![],
+            };
         }
     }
 
     // —— Element 节点：先收集信息并释放 node 的借用，避免在递归期间持有 ——
-    let (addr, computed, children, is_contents, own_font_size) = {
+    let (addr, computed, children, is_contents, own_font_size, is_absolute, is_positioned) = {
         let node_ref = node.borrow();
         let (addr, tag) = match &node_ref.kind {
             NodeKind::Element(el) => (
                 Rc::as_ptr(node) as usize,
                 el.local_name.to_ascii_lowercase(),
             ),
-            _ => return Vec::new(),
+            _ => return Built::default(),
         };
 
         let computed = styles.get(&addr);
@@ -133,7 +155,7 @@ fn build_node_recursive(
         // P2-13: head/title/script/style/meta/link/base/template 等非渲染标签
         // 不生成布局盒（无 UA 表时默认，避免多余空白盒）。
         if is_non_rendered_tag(&tag) {
-            return Vec::new();
+            return Built::default();
         }
 
         // display 关键字（单态化后取首个 Ident，P2-20）。
@@ -144,7 +166,7 @@ fn build_node_recursive(
 
         // display: none → 跳过该节点及其整个子树。
         if display_kw.as_deref() == Some("none") {
-            return Vec::new();
+            return Built::default();
         }
 
         let is_contents = display_kw.as_deref() == Some("contents");
@@ -155,41 +177,83 @@ fn build_node_recursive(
             .and_then(resolve_font_size)
             .unwrap_or(inherited_font_size);
 
+        // position 关键字（默认 static）。absolute/fixed → 脱离 normal flow；
+        // absolute/fixed/relative 均为 positioned（成为子 absolute 的 containing block）。
+        let position_kw = computed
+            .and_then(|cs| cs.get("position"))
+            .and_then(|cv| cv.keyword())
+            .map(|s| s.to_ascii_lowercase());
+        let is_absolute = matches!(position_kw.as_deref(), Some("absolute") | Some("fixed"));
+        let is_positioned = is_absolute || matches!(position_kw.as_deref(), Some("relative"));
+
         // 克隆子节点 Rc 引用，释放 node_ref 借用后再递归。
         let children: Vec<Rc<RefCell<Node>>> = node_ref.child_nodes().to_vec();
-        (addr, computed, children, is_contents, own_font_size)
+        (
+            addr,
+            computed,
+            children,
+            is_contents,
+            own_font_size,
+            is_absolute,
+            is_positioned,
+        )
     };
 
-    // display: contents → 元素不生成盒，子元素直接参与父格式上下文，
-    // 返回子元素生成的 box 列表，由父节点拼接（P2-12）。
+    // 递归子节点，分别收集正常流与 absolute box。
+    let mut in_flow_children: Vec<NodeId> = Vec::new();
+    let mut absolute_desc: Vec<NodeId> = Vec::new();
+    for child in &children {
+        let built = build_node_recursive(tree, child, styles, font_system, own_font_size);
+        in_flow_children.extend(built.in_flow);
+        absolute_desc.extend(built.absolute);
+    }
+
+    // display: contents → 元素不生成盒，子 in_flow box 上浮（P2-12）。
     if is_contents {
-        return children
-            .iter()
-            .flat_map(|child| build_node_recursive(tree, child, styles, font_system, own_font_size))
-            .collect();
+        return Built {
+            in_flow: in_flow_children,
+            absolute: absolute_desc,
+        };
     }
 
     let taffy_style = style_map::map_style(computed);
-
-    // 先递归处理子节点，收集已创建的 taffy NodeId 列表。
-    let child_ids: Vec<NodeId> = children
-        .iter()
-        .flat_map(|child| build_node_recursive(tree, child, styles, font_system, own_font_size))
-        .collect();
-
-    // 根据是否有子节点选择创建方式。
-    let taffy_node = if child_ids.is_empty() {
+    let taffy_node = if in_flow_children.is_empty() {
         tree.taffy
             .new_leaf(taffy_style)
             .expect("taffy new_leaf 失败：无法创建叶子布局节点")
     } else {
         tree.taffy
-            .new_with_children(taffy_style, &child_ids)
+            .new_with_children(taffy_style, &in_flow_children)
             .expect("taffy new_with_children 失败：无法创建带子节点的布局节点")
     };
-
     tree.node_map.insert(addr, taffy_node);
-    vec![taffy_node]
+
+    if is_absolute {
+        // 本元素 absolute：其后代 absolute 挂到本元素（本元素是 positioned），
+        // 本元素自身作为 absolute box 上传到上层 positioned ancestor。
+        for a in &absolute_desc {
+            tree.taffy.add_child(taffy_node, *a).ok();
+        }
+        Built {
+            in_flow: vec![],
+            absolute: vec![taffy_node],
+        }
+    } else if is_positioned {
+        // relative（positioned）：子树 absolute 后代挂到本元素（containing block）。
+        for a in &absolute_desc {
+            tree.taffy.add_child(taffy_node, *a).ok();
+        }
+        Built {
+            in_flow: vec![taffy_node],
+            absolute: vec![],
+        }
+    } else {
+        // static：absolute 后代继续上传。
+        Built {
+            in_flow: vec![taffy_node],
+            absolute: absolute_desc,
+        }
+    }
 }
 
 /// 非渲染元素标签：这些标签不产生可视化盒（head 及其元数据、脚本、样式等）。
