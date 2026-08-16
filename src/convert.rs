@@ -20,7 +20,10 @@ use taffy::style::{Dimension, Style};
 use taffy::NodeId;
 
 use crate::style_map;
-use crate::text::{measure_text, resolve_font_size, DEFAULT_FONT_SIZE};
+use crate::text::{
+    measure_text, resolve_font_family, resolve_font_size, resolve_font_weight, DEFAULT_FONT_FAMILY,
+    DEFAULT_FONT_SIZE, DEFAULT_FONT_WEIGHT,
+};
 use crate::tree::LayoutTree;
 
 /// DOM 节点指针地址 → ComputedStyle 的映射类型。
@@ -57,6 +60,8 @@ pub fn build_layout_tree(root: &Rc<RefCell<Node>>, styles: &StyleMap) -> LayoutT
             styles,
             &mut font_system,
             DEFAULT_FONT_SIZE,
+            DEFAULT_FONT_FAMILY,
+            DEFAULT_FONT_WEIGHT,
         );
         tree.root = built.in_flow.first().copied();
         // 子树内无 positioned ancestor 的 absolute box 挂到根盒（html），
@@ -112,6 +117,8 @@ fn build_node_recursive(
     styles: &StyleMap,
     font_system: &mut FontSystem,
     inherited_font_size: f32,
+    inherited_font_family: &str,
+    inherited_font_weight: u16,
 ) -> Built {
     // —— Text 节点：测量为固定尺寸的 taffy leaf（T-1，单行不换行）——
     // Text 是叶子，无子递归，可在持有 borrow 时直接测量（font_system 是
@@ -119,7 +126,13 @@ fn build_node_recursive(
     {
         let node_ref = node.borrow();
         if let NodeKind::Text(text) = &node_ref.kind {
-            let (w, h) = measure_text(&text.data, inherited_font_size, font_system);
+            let (w, h) = measure_text(
+                &text.data,
+                inherited_font_size,
+                inherited_font_family,
+                inherited_font_weight,
+                font_system,
+            );
             let addr = Rc::as_ptr(node) as usize;
             let leaf = tree
                 .taffy
@@ -140,7 +153,17 @@ fn build_node_recursive(
     }
 
     // —— Element 节点：先收集信息并释放 node 的借用，避免在递归期间持有 ——
-    let (addr, computed, children, is_contents, own_font_size, is_absolute, is_positioned) = {
+    let (
+        addr,
+        computed,
+        children,
+        is_contents,
+        own_font_size,
+        own_font_family,
+        own_font_weight,
+        is_absolute,
+        is_positioned,
+    ) = {
         let node_ref = node.borrow();
         let (addr, tag) = match &node_ref.kind {
             NodeKind::Element(el) => (
@@ -177,6 +200,14 @@ fn build_node_recursive(
             .and_then(resolve_font_size)
             .unwrap_or(inherited_font_size);
 
+        // 自身 font-family / font-weight（继承属性，T-3）。
+        let own_font_family = computed
+            .and_then(resolve_font_family)
+            .unwrap_or_else(|| inherited_font_family.to_string());
+        let own_font_weight = computed
+            .and_then(resolve_font_weight)
+            .unwrap_or(inherited_font_weight);
+
         // position 关键字（默认 static）。absolute/fixed → 脱离 normal flow；
         // absolute/fixed/relative 均为 positioned（成为子 absolute 的 containing block）。
         let position_kw = computed
@@ -194,6 +225,8 @@ fn build_node_recursive(
             children,
             is_contents,
             own_font_size,
+            own_font_family,
+            own_font_weight,
             is_absolute,
             is_positioned,
         )
@@ -203,7 +236,15 @@ fn build_node_recursive(
     let mut in_flow_children: Vec<NodeId> = Vec::new();
     let mut absolute_desc: Vec<NodeId> = Vec::new();
     for child in &children {
-        let built = build_node_recursive(tree, child, styles, font_system, own_font_size);
+        let built = build_node_recursive(
+            tree,
+            child,
+            styles,
+            font_system,
+            own_font_size,
+            &own_font_family,
+            own_font_weight,
+        );
         in_flow_children.extend(built.in_flow);
         absolute_desc.extend(built.absolute);
     }
