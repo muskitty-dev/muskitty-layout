@@ -22,8 +22,9 @@ pub(crate) const DEFAULT_FONT_FAMILY: &str = "serif";
 /// 默认字重（CSS `font-weight` 初始值 `normal` = 400）。
 pub(crate) const DEFAULT_FONT_WEIGHT: u16 = 400;
 
-/// 测量单行文本的自然尺寸（不换行）。
+/// 测量文本的自然尺寸。
 ///
+/// `max_width` 为 `Some(w)` 时按宽度 `w` 换行（T-3），`None` 时单行不换行。
 /// 返回 `(width, height)`（px）。行高按 `font_size * 1.2` 近似（CSS `normal`
 /// 行高的简化），精确 line-height 解析推迟。
 pub(crate) fn measure_text(
@@ -31,12 +32,13 @@ pub(crate) fn measure_text(
     font_size: f32,
     font_family: &str,
     font_weight: u16,
+    max_width: Option<f32>,
     font_system: &mut FontSystem,
 ) -> (f32, f32) {
     let line_height = font_size * 1.2;
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
-    // 单行：不设宽度上限（不触发换行）。
-    buffer.set_size(font_system, None, None);
+    // 换行：宽度上限为 Some 则换行，None 则单行。
+    buffer.set_size(font_system, max_width, None);
     let attrs = Attrs::new()
         .family(family_from_css(font_family))
         .weight(Weight(font_weight));

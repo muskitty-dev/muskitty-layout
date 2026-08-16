@@ -39,6 +39,9 @@ use taffy::style::AvailableSpace;
 use std::collections::HashMap;
 use taffy::NodeId;
 
+use crate::text::measure_text;
+use crate::tree::NodeContext;
+
 /// 计算布局树，返回每个元素的布局结果。
 ///
 /// `viewport_width` / `viewport_height` 为根容器的可用空间（px），
@@ -61,12 +64,51 @@ pub fn compute_layout(
     let mut result = LayoutResult::new();
 
     if let Some(root) = tree.root {
-        tree.taffy.compute_layout(
+        // measure function：对 Text context 按容器可用宽度换行测量（T-3）。
+        // split borrow：font_system 与 taffy 是 LayoutTree 的不同字段。
+        let font_system = &mut tree.font_system;
+        let measure = |_known: Size<Option<f32>>,
+                       available: Size<AvailableSpace>,
+                       _id: NodeId,
+                       ctx: Option<&mut NodeContext>,
+                       _style: &taffy::style::Style|
+         -> Size<f32> {
+            let Some(NodeContext::Text {
+                text,
+                font_size,
+                font_family,
+                font_weight,
+            }) = ctx
+            else {
+                return Size::ZERO;
+            };
+            let max_width = match available.width {
+                AvailableSpace::Definite(w) => Some(w),
+                _ => None,
+            };
+            let (measured_w, h) = measure_text(
+                text,
+                *font_size,
+                font_family,
+                *font_weight,
+                max_width,
+                font_system,
+            );
+            // 换行时 width = 容器可用宽度（占满行），renderer 用同宽换行保持一致。
+            let width = match available.width {
+                AvailableSpace::Definite(w) => w,
+                _ => measured_w,
+            };
+            Size { width, height: h }
+        };
+
+        tree.taffy.compute_layout_with_measure(
             root,
             Size {
                 width: AvailableSpace::Definite(viewport_width),
                 height: AvailableSpace::Definite(viewport_height),
             },
+            measure,
         )?;
 
         for (&dom_addr, &taffy_node) in &tree.node_map {

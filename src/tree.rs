@@ -10,8 +10,24 @@
 
 use std::collections::HashMap;
 
+use cosmic_text::FontSystem;
 use taffy::NodeId;
 use taffy::TaffyTree;
+
+/// taffy 节点的 context，用于 text 节点的 measure function（T-3 换行）。
+///
+/// 仅 Text 节点携带 context；非 text 节点 measure function 收到的
+/// `Option<&mut NodeContext>` 为 `None`。
+pub(crate) enum NodeContext {
+    /// Text 节点：携带文本内容 + 字体样式，布局时由 measure function 按
+    /// 容器可用宽度换行测量。
+    Text {
+        text: String,
+        font_size: f32,
+        font_family: String,
+        font_weight: u16,
+    },
+}
 
 /// 布局树。
 ///
@@ -25,12 +41,14 @@ use taffy::TaffyTree;
 /// 句柄）。已知限制：DOM 树变更后地址可能失效/复用。后续批次应改为每个
 /// 元素一个稳定 id 的不透明句柄。
 pub struct LayoutTree {
-    /// taffy 的内部节点树（默认 context 类型为 `()`）。
-    pub(crate) taffy: TaffyTree,
+    /// taffy 的内部节点树（context 类型为 [`NodeContext`]）。
+    pub(crate) taffy: TaffyTree<NodeContext>,
     /// DOM 节点指针地址 → taffy NodeId 映射。
     pub(crate) node_map: HashMap<usize, NodeId>,
     /// 根节点 ID（若 DOM 根为 Element 且未 display:none 则有值）。
     pub(crate) root: Option<NodeId>,
+    /// 文本测量用的字体系统（compute_layout 的 measure function 使用）。
+    pub(crate) font_system: FontSystem,
 }
 
 impl LayoutTree {
@@ -40,6 +58,7 @@ impl LayoutTree {
             taffy: TaffyTree::new(),
             node_map: HashMap::new(),
             root: None,
+            font_system: FontSystem::new(),
         }
     }
 

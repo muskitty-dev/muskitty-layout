@@ -12,19 +12,16 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use cosmic_text::FontSystem;
 use muskitty_cascade::ComputedStyle;
 use muskitty_dom::{Node, NodeKind};
-use taffy::geometry::Size;
-use taffy::style::{Dimension, Style};
 use taffy::NodeId;
 
 use crate::style_map;
 use crate::text::{
-    measure_text, resolve_font_family, resolve_font_size, resolve_font_weight, DEFAULT_FONT_FAMILY,
+    resolve_font_family, resolve_font_size, resolve_font_weight, DEFAULT_FONT_FAMILY,
     DEFAULT_FONT_SIZE, DEFAULT_FONT_WEIGHT,
 };
-use crate::tree::LayoutTree;
+use crate::tree::{LayoutTree, NodeContext};
 
 /// DOM 节点指针地址 → ComputedStyle 的映射类型。
 pub type StyleMap = HashMap<usize, ComputedStyle>;
@@ -50,15 +47,12 @@ pub fn build_layout_tree(root: &Rc<RefCell<Node>>, styles: &StyleMap) -> LayoutT
     let root_element = find_root_element(root);
     if let Some(root_el) = root_element {
         // 根元素可能 display:none / contents 而不生成根盒；取首个生成的 box
-        // 作为树根（contents 根极罕见，防御处理）。
-        // 每棵布局树构建时创建一次 FontSystem（扫描系统字体），复用给所有
-        // text 测量（T-1）。
-        let mut font_system = FontSystem::new();
+        // 作为树根（contents 根极罕见，防御处理）。FontSystem 由 LayoutTree
+        // 持有（T-3 换行 measure function 在 compute_layout 时使用）。
         let built = build_node_recursive(
             &mut tree,
             &root_el,
             styles,
-            &mut font_system,
             DEFAULT_FONT_SIZE,
             DEFAULT_FONT_FAMILY,
             DEFAULT_FONT_WEIGHT,
@@ -115,35 +109,29 @@ fn build_node_recursive(
     tree: &mut LayoutTree,
     node: &Rc<RefCell<Node>>,
     styles: &StyleMap,
-    font_system: &mut FontSystem,
     inherited_font_size: f32,
     inherited_font_family: &str,
     inherited_font_weight: u16,
 ) -> Built {
-    // —— Text 节点：测量为固定尺寸的 taffy leaf（T-1，单行不换行）——
-    // Text 是叶子，无子递归，可在持有 borrow 时直接测量（font_system 是
-    // 独立参数，与 node 借用不冲突）。
+    // —— Text 节点：携带 context 的 leaf，布局时 measure function 换行测量（T-3）——
+    // Text 是叶子，无子递归；不预先测量，尺寸由 compute_layout 的 measure
+    // function 按容器可用宽度确定。
     {
         let node_ref = node.borrow();
         if let NodeKind::Text(text) = &node_ref.kind {
-            let (w, h) = measure_text(
-                &text.data,
-                inherited_font_size,
-                inherited_font_family,
-                inherited_font_weight,
-                font_system,
-            );
             let addr = Rc::as_ptr(node) as usize;
             let leaf = tree
                 .taffy
-                .new_leaf(Style {
-                    size: Size {
-                        width: Dimension::length(w),
-                        height: Dimension::length(h),
+                .new_leaf_with_context(
+                    taffy::style::Style::default(),
+                    NodeContext::Text {
+                        text: text.data.clone(),
+                        font_size: inherited_font_size,
+                        font_family: inherited_font_family.to_string(),
+                        font_weight: inherited_font_weight,
                     },
-                    ..Default::default()
-                })
-                .expect("taffy new_leaf 失败：无法创建文本叶子节点");
+                )
+                .expect("taffy new_leaf_with_context 失败：无法创建文本叶子节点");
             tree.node_map.insert(addr, leaf);
             return Built {
                 in_flow: vec![leaf],
@@ -240,7 +228,6 @@ fn build_node_recursive(
             tree,
             child,
             styles,
-            font_system,
             own_font_size,
             &own_font_family,
             own_font_weight,
