@@ -80,7 +80,7 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
 
   msrv:
-    name: MSRV (1.82)
+    name: MSRV (1.85)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -90,6 +90,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.82"
+          toolchain: "1.85"
       - uses: Swatinem/rust-cache@v2
       - run: cargo check

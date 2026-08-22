@@ -2,7 +2,7 @@
 name = "muskitty-layout"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.85"
 license = "Apache-2.0"
 description = "CSS Layout engine (box tree construction + taffy layout computation)"
 repository = "https://github.com/muskitty-dev/muskitty-layout"
