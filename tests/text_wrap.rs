@@ -83,3 +83,80 @@ fn wide_container_no_wrap() {
         single.height
     );
 }
+
+/// 构造 ident 关键字的 ComputedValue（如 `bold`）。
+fn kw(s: &str) -> ComputedValue {
+    ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Ident(
+        s.to_string(),
+    ))])
+}
+
+/// 构造「div[width: wpx + font 声明] > text」并 compute_layout，返回 text 布局。
+///
+/// `font_size` / `font_weight` 为 `Some` 时在容器上声明（text 节点继承）。
+fn layout_text_with_font(
+    width: f64,
+    text: &str,
+    font_size: Option<f64>,
+    font_weight: Option<&str>,
+) -> muskitty_layout::NodeLayout {
+    let doc = Node::new_document();
+    let container = Node::new_element_html("div", vec![], &doc);
+    let text_node = Node::new_text(text, &doc);
+    let text_addr = Rc::as_ptr(&text_node) as usize;
+    append_child(&container, text_node).unwrap();
+
+    let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
+    let mut cs = ComputedStyle::new();
+    cs.set("width", px(width));
+    if let Some(size) = font_size {
+        cs.set("font-size", px(size));
+    }
+    if let Some(weight) = font_weight {
+        cs.set("font-weight", kw(weight));
+    }
+    styles.insert(Rc::as_ptr(&container) as usize, cs);
+
+    let mut tree = build_layout_tree(&container, &styles);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout ok");
+    *result.get(text_addr).expect("text node in layout")
+}
+
+#[test]
+fn font_size_scales_measured_line_height() {
+    // T-3：font-size 影响测量 —— 32px 的单行高明显大于 16px（line-height
+    // 随字号缩放），宽度仍占满容器（Definite available width）。
+    let small = layout_text_with_font(400.0, "Hello", Some(16.0), None);
+    let large = layout_text_with_font(400.0, "Hello", Some(32.0), None);
+    assert!(
+        large.height > small.height * 1.5,
+        "larger font-size should scale line height, large={} small={}",
+        large.height,
+        small.height
+    );
+    assert!(
+        (large.width - 400.0).abs() < 1.0,
+        "text width should fill container, got {}",
+        large.width
+    );
+}
+
+#[test]
+fn font_weight_bold_keeps_container_width_single_line() {
+    // T-3：font-weight: bold 不改变块级文本占满容器的宽度语义，
+    // 单行高度与 normal 同字号一致（同行高）。
+    let normal = layout_text_with_font(400.0, "Hello", Some(16.0), Some("normal"));
+    let bold = layout_text_with_font(400.0, "Hello", Some(16.0), Some("bold"));
+    assert!(
+        (normal.width - 400.0).abs() < 1.0 && (bold.width - 400.0).abs() < 1.0,
+        "both should fill container width, normal={} bold={}",
+        normal.width,
+        bold.width
+    );
+    assert!(
+        (bold.height - normal.height).abs() < 2.0,
+        "same font-size should keep line height, normal={} bold={}",
+        normal.height,
+        bold.height
+    );
+}
