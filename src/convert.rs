@@ -119,6 +119,17 @@ fn build_node_recursive(
     {
         let node_ref = node.borrow();
         if let NodeKind::Text(text) = &node_ref.kind {
+            // 纯空白文本节点（源码换行/缩进）不参与布局：块级边界空白按
+            // CSS white-space 处理应为零尺寸。否则每处源码换行都会生成
+            // 实体文本盒（且换行符被 cosmic-text 视为换行 → 2 行高），把
+            // 后续内容逐级下推（"汉字位移"的第二个来源）。行内空格的
+            // 折叠属于 inline formatting context（远期）。
+            if text.data.chars().all(|c| c.is_ascii_whitespace()) {
+                return Built {
+                    in_flow: vec![],
+                    absolute: vec![],
+                };
+            }
             let addr = Rc::as_ptr(node) as usize;
             let leaf = tree
                 .taffy

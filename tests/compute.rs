@@ -325,3 +325,39 @@ fn flex_grow_distributes_free_space() {
     assert_approx(c2.width, 200.0, "flex-grow:2 → child2 宽度 100+100");
     assert_approx(c2.x, 150.0, "child2 x = child1 宽度");
 }
+
+/// 纯空白文本节点（源码换行/缩进）不产生布局盒：`<p>汉字</p>` 与
+/// 前后带纯空白兄弟节点的版本，文本盒位置一致（块级边界空白按 CSS
+/// 应为零尺寸，否则每处源码换行会把后续内容下推 2 行文本高）。
+#[test]
+fn whitespace_only_text_node_takes_no_space() {
+    use muskitty_dom::{append_child, Node};
+
+    fn layout_p_with(ws_before: bool) -> f32 {
+        let doc = Node::new_document();
+        if ws_before {
+            // 模拟源码换行+缩进：换行符 + 空格组成的纯空白文本。
+            let ws = Node::new_text("\n        ", &doc);
+            drop(append_child(&doc, ws));
+        }
+        let p = make_element("p", &doc);
+        let text = Node::new_text("汉字测试", &doc);
+        drop(append_child(&p, text));
+        drop(append_child(&doc, p));
+        let styles: HashMap<usize, ComputedStyle> = HashMap::new();
+        let mut tree = build_layout_tree(&doc, &styles);
+        let layout = compute_layout(&mut tree, 900.0, 600.0).expect("layout");
+        layout
+            .nodes
+            .values()
+            .map(|n| n.y)
+            .fold(f32::NAN, |acc, y| if acc.is_nan() { y } else { acc.min(y) })
+    }
+
+    assert_eq!(layout_p_with(false), 0.0, "no-whitespace p starts at 0");
+    assert_eq!(
+        layout_p_with(true),
+        0.0,
+        "whitespace-only sibling must not push p down"
+    );
+}

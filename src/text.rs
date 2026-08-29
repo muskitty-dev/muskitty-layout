@@ -45,11 +45,14 @@ pub(crate) fn measure_text(
     buffer.set_text(font_system, text, attrs, Shaping::Advanced);
     // 遍历 layout runs 计算实际文本尺寸（最大行宽 × 总行高）。`size()` 返回的
     // 是 buffer 设定尺寸而非文本内容尺寸，故这里从 runs 累加。
+    // 高度 = 行顶 + 行高：`run.line_y` 是**基线**（含 cosmic-text 的
+    // 行内居中偏移 + max_ascent），不是行顶——误用会把文本盒撑到
+    // ~2.2em（基线 ≈1em + 行高 1.2em），汉字字形更高、位移更明显。
     let mut width: f32 = 0.0;
     let mut height: f32 = 0.0;
     for run in buffer.layout_runs() {
         width = width.max(run.line_w);
-        height = height.max(run.line_y + run.line_height);
+        height = height.max(run.line_top + run.line_height);
     }
     (width, height)
 }
