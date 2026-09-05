@@ -33,13 +33,14 @@ pub struct NodeLayout {
 
 /// 布局计算错误。
 ///
-/// 所有错误均来自 taffy 内部，通常由 NaN/Inf 输入、循环 flex 引用、
-/// 或不存在的 NodeId 查询触发。调用方应通过 `Result` 处理，
-/// 而非依赖 `expect` panic 跨模块传播。
+/// 所有错误均来自 taffy 内部：taffy 只在 NodeId 查询/树结构非法时报错，
+/// **不会**因 style 含 NaN/Inf 报错（taffy 0.12 无有限性检查）；非有限
+/// CSS 数值由 `style_map::clamp_length` 在映射边界钳制化解。调用方应通过
+/// `Result` 处理，而非依赖 `expect` panic 跨模块传播。
 #[derive(Debug)]
 pub enum LayoutError {
-    /// taffy `compute_layout` 失败。常见原因：flex 容器循环引用、
-    /// style 中包含 NaN/Inf、taffy 内部断言失败。
+    /// taffy `compute_layout` 失败：NodeId 查询失败或树结构非法
+    /// （如子节点不属于该树）。
     ComputeLayoutFailed(taffy::TaffyError),
     /// `taffy.layout(node)` 查询失败：节点不在布局树中。
     /// 通常由 `node_map` 与 taffy 内部状态不同步导致。

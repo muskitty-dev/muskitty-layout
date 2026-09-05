@@ -78,12 +78,14 @@ fn family_from_css(name: &str) -> Family<'_> {
 /// cascade 已把 font-size 归一化为 px Dimension（`normalize_font_size`），
 /// 此处直接解析 `Token::Dimension(_, "px")`。无法解析时返回 `None`
 /// （调用方回退到继承的 font-size 或 [`DEFAULT_FONT_SIZE`]）。
+/// F-1: 出口经 [`clamp_length`](crate::style_map::clamp_length) 钳制，
+/// `font-size: 1e39px` 之类敌意值不得以 inf 进入 cosmic-text `Metrics`。
 pub(crate) fn resolve_font_size(style: &ComputedStyle) -> Option<f32> {
     let cv = style.get("font-size")?;
     for v in cv.tokens() {
         if let ComponentValue::PreservedToken(Token::Dimension(numeric, unit)) = v {
             if unit.eq_ignore_ascii_case("px") {
-                return Some(numeric.value as f32);
+                return Some(crate::style_map::clamp_length(numeric.value));
             }
         }
     }

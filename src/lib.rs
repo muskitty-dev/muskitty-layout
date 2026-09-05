@@ -52,10 +52,14 @@ use crate::tree::NodeContext;
 ///
 /// # 错误处理
 ///
-/// 返回 `Result<LayoutResult, LayoutError>`。当 taffy 内部报告错误时
-/// （如 flex 容器循环引用、style 含 NaN/Inf、NodeId 查询失败），
-/// 调用方应决定降级策略：使用空 [`LayoutResult::default`] 让 paint 阶段
-/// 自然跳过所有元素，或显示错误占位符。**不应** `expect` panic 跨模块传播。
+/// 返回 `Result<LayoutResult, LayoutError>`。taffy 仅在 NodeId 查询失败/
+/// 树结构非法时报错；**它不检查 style 中的 NaN/Inf**（已对照 taffy 0.12.2
+/// 源码核实），非有限值会被 NaN 坐标/尺寸污染布局结果。该风险由
+/// [`style_map::clamp_length`](crate::style_map::clamp_length) 在
+/// ComputedValue → taffy 的边界统一钳制化解，调用方无需自行防御。
+/// 当 taffy 仍报告错误时，调用方应决定降级策略：使用空
+/// [`LayoutResult::default`] 让 paint 阶段自然跳过所有元素，或显示错误
+/// 占位符。**不应** `expect` panic 跨模块传播。
 pub fn compute_layout(
     tree: &mut LayoutTree,
     viewport_width: f32,

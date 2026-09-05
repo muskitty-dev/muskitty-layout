@@ -389,6 +389,26 @@ fn map_length_percentage(cv: Option<&ComputedValue>) -> LengthPercentage {
     }
 }
 
+/// 长度钳制上限：2^25 px（f32 在该量级仍保有 1px 精度），与 Servo/Gecko
+/// 的布局长度上限一致。审计 F-1：敌意 CSS 数值不得以非有限值进入 taffy。
+pub(crate) const MAX_LENGTH_PX: f32 = 33_554_432.0;
+
+/// 敌意 CSS 数值安全钳制（审计 F-1）。
+///
+/// tokenizer 对 `1e999` / 400 位十进制字面量产出 `Ok(inf)`（CSS Syntax §4.3
+/// 不设数值范围上限），裸 `as f32` 又会把超界 f64 变成 inf。已核实 taffy
+/// 0.12 **不检查** NaN/Inf（`TaffyError` 仅节点查找/树结构变体），非有限值
+/// 会直通布局结果。因此 [`ComputedStyle`] → taffy 的所有数值出口统一走本
+/// 函数：NaN → 0.0；±inf / 超界 → `±MAX_LENGTH_PX`。
+pub(crate) fn clamp_length(v: f64) -> f32 {
+    let v = v as f32;
+    if v.is_nan() {
+        0.0
+    } else {
+        v.clamp(-MAX_LENGTH_PX, MAX_LENGTH_PX)
+    }
+}
+
 /// 从 component value 列表中提取第一个 `px` 长度值。
 ///
 /// - P1-8: 顶层裸 `0`（`Token::Number(0)`）是合法 `<length>`（CSS Values
@@ -397,13 +417,14 @@ fn map_length_percentage(cv: Option<&ComputedValue>) -> LengthPercentage {
 ///   却错误落到 AUTO。
 /// - P1-9: `calc(...)` 在 cascade 中保留为 `Function`，递归展开取内层首个
 ///   有效 px（短期方案；长期由 cascade 层做 calc 求值）。
+/// - F-1: 出口经 [`clamp_length`] 钳制，非有限/超界值不得进入 taffy。
 fn extract_px(cvs: &[ComponentValue]) -> Option<f32> {
     for cv in cvs {
         match cv {
             ComponentValue::PreservedToken(Token::Dimension(numeric, unit))
                 if unit.eq_ignore_ascii_case("px") =>
             {
-                return Some(numeric.value as f32);
+                return Some(clamp_length(numeric.value));
             }
             ComponentValue::PreservedToken(Token::Number(n)) if n.value == 0.0 => {
                 return Some(0.0);
@@ -426,7 +447,7 @@ fn extract_percent(cvs: &[ComponentValue]) -> Option<f32> {
     for cv in cvs {
         match cv {
             ComponentValue::PreservedToken(Token::Percentage(numeric)) => {
-                return Some(numeric.value as f32);
+                return Some(clamp_length(numeric.value));
             }
             ComponentValue::Function(f) => {
                 if let Some(pct) = extract_percent(&f.value) {
@@ -443,7 +464,7 @@ fn extract_percent(cvs: &[ComponentValue]) -> Option<f32> {
 fn extract_number_from_cv(cv: &ComputedValue) -> Option<f32> {
     for cv in cv.tokens() {
         if let ComponentValue::PreservedToken(Token::Number(numeric)) = cv {
-            return Some(numeric.value as f32);
+            return Some(clamp_length(numeric.value));
         }
     }
     None
@@ -458,13 +479,13 @@ fn map_grid_template(cv: &ComputedValue) -> Vec<GridTemplateComponent<String>> {
         match token {
             ComponentValue::PreservedToken(Token::Dimension(numeric, unit)) => {
                 if unit.eq_ignore_ascii_case("fr") {
-                    tracks.push(fr(numeric.value as f32));
+                    tracks.push(fr(clamp_length(numeric.value)));
                 } else if unit.eq_ignore_ascii_case("px") {
-                    tracks.push(length(numeric.value as f32));
+                    tracks.push(length(clamp_length(numeric.value)));
                 }
             }
             ComponentValue::PreservedToken(Token::Percentage(numeric)) => {
-                tracks.push(percent(numeric.value as f32));
+                tracks.push(percent(clamp_length(numeric.value)));
             }
             ComponentValue::PreservedToken(Token::Ident(s)) if s.eq_ignore_ascii_case("auto") => {
                 tracks.push(GridTemplateComponent::AUTO);
@@ -1117,5 +1138,83 @@ mod tests {
         let style = map_style(Some(&cs));
         assert_eq!(style.gap.height, LengthPercentage::percent(0.05));
         assert_eq!(style.gap.width, LengthPercentage::percent(0.20));
+    }
+
+    // —— F-1: 敌意 CSS 数值钳制（非有限/超界值不得进入 taffy）——
+
+    #[test]
+    fn clamp_length_binds_non_finite_and_huge_values() {
+        assert_eq!(clamp_length(f64::INFINITY), MAX_LENGTH_PX);
+        assert_eq!(clamp_length(f64::NEG_INFINITY), -MAX_LENGTH_PX);
+        assert_eq!(clamp_length(f64::NAN), 0.0);
+        // f64 巨值 `as f32` 会变 inf，钳制后仍有界。
+        assert_eq!(clamp_length(1e300), MAX_LENGTH_PX);
+        assert_eq!(clamp_length(16.0), 16.0);
+        assert_eq!(clamp_length(-40.5), -40.5);
+    }
+
+    #[test]
+    fn width_huge_px_clamps_to_max() {
+        // `width: 1e39px`（tokenizer 产出 inf）→ length(MAX_LENGTH_PX)。
+        let mut cs = ComputedStyle::new();
+        cs.set("width", px(f64::INFINITY));
+        let style = map_style(Some(&cs));
+        assert_eq!(style.size.width, Dimension::length(MAX_LENGTH_PX));
+    }
+
+    #[test]
+    fn width_nan_px_clamps_to_zero() {
+        let mut cs = ComputedStyle::new();
+        cs.set("width", px(f64::NAN));
+        let style = map_style(Some(&cs));
+        assert_eq!(style.size.width, Dimension::length(0.0));
+    }
+
+    #[test]
+    fn margin_huge_percent_clamps() {
+        let mut cs = ComputedStyle::new();
+        cs.set("margin-left", pct(f64::INFINITY));
+        let style = map_style(Some(&cs));
+        assert_eq!(
+            style.margin.left,
+            LengthPercentageAuto::percent(MAX_LENGTH_PX / 100.0)
+        );
+    }
+
+    #[test]
+    fn flex_grow_huge_number_clamps() {
+        // `flex-grow: 1e39` → inf 会令 taffy flex 算法 inf/inf → NaN。
+        let mut cs = ComputedStyle::new();
+        cs.set("flex-grow", num(1e39));
+        let style = map_style(Some(&cs));
+        assert_eq!(style.flex_grow, MAX_LENGTH_PX);
+    }
+
+    #[test]
+    fn grid_fr_huge_clamps() {
+        let mut cs = ComputedStyle::new();
+        cs.set(
+            "grid-template-columns",
+            ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Dimension(
+                Numeric {
+                    value: f64::INFINITY,
+                    is_integer: false,
+                },
+                "fr".to_string(),
+            ))]),
+        );
+        let style = map_style(Some(&cs));
+        let tracks = &style.grid_template_columns;
+        assert_eq!(tracks.len(), 1);
+        // 与 `fr(MAX_LENGTH_PX)` 直接对比，不依赖 taffy 内部变体结构。
+        let expected: GridTemplateComponent<String> = fr(MAX_LENGTH_PX);
+        assert_eq!(tracks[0], expected);
+    }
+
+    #[test]
+    fn resolve_font_size_huge_clamps() {
+        let mut cs = ComputedStyle::new();
+        cs.set("font-size", px(1e39));
+        assert_eq!(crate::text::resolve_font_size(&cs), Some(MAX_LENGTH_PX));
     }
 }
