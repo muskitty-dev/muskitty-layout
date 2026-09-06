@@ -29,9 +29,9 @@ pub(crate) mod style_map;
 pub(crate) mod text;
 pub(crate) mod tree;
 
-pub use convert::build_layout_tree;
+pub use convert::{build_layout_tree, build_layout_tree_with_fonts};
 pub use result::{LayoutError, LayoutResult, NodeLayout};
-pub use tree::LayoutTree;
+pub use tree::{LayoutTree, SharedFontSystem};
 
 use taffy::geometry::Size;
 use taffy::style::AvailableSpace;
@@ -69,8 +69,9 @@ pub fn compute_layout(
 
     if let Some(root) = tree.root {
         // measure function：对 Text context 按容器可用宽度换行测量（T-3）。
-        // split borrow：font_system 与 taffy 是 LayoutTree 的不同字段。
-        let font_system = &mut tree.font_system;
+        // LAY-2：字体系统 Rc 共享（会话级注入），每次 measure 取 RefCell
+        // 可变借用——闭包持有 Rc 克隆，与 `&mut tree.taffy` 无借用冲突。
+        let font_system = std::rc::Rc::clone(&tree.font_system);
         let measure = |_known: Size<Option<f32>>,
                        available: Size<AvailableSpace>,
                        _id: NodeId,
@@ -82,6 +83,7 @@ pub fn compute_layout(
                 font_size,
                 font_family,
                 font_weight,
+                measured,
             }) = ctx
             else {
                 return Size::ZERO;
@@ -90,14 +92,39 @@ pub fn compute_layout(
                 AvailableSpace::Definite(w) => Some(w),
                 _ => None,
             };
-            let (measured_w, h) = measure_text(
-                text,
-                *font_size,
-                font_family,
-                *font_weight,
-                max_width,
-                font_system,
-            );
+            // LAY-3：同可用宽度的重复测量直接命中缓存（文本/字体参数
+            // 不可变，测量仅由可用宽度决定），跳过 Buffer::new + shaping。
+            let (measured_w, h) = if let Some((key, cached)) = measured {
+                if *key == max_width {
+                    // 命中：width 语义同下（Definite 取容器宽，占满行）。
+                    return Size {
+                        width: match available.width {
+                            AvailableSpace::Definite(w) => w,
+                            _ => cached.0,
+                        },
+                        height: cached.1,
+                    };
+                }
+                // key 不同：重测并覆盖缓存（单槽，最近一次为准）。
+                measure_text(
+                    text,
+                    *font_size,
+                    font_family,
+                    *font_weight,
+                    max_width,
+                    &mut font_system.borrow_mut(),
+                )
+            } else {
+                measure_text(
+                    text,
+                    *font_size,
+                    font_family,
+                    *font_weight,
+                    max_width,
+                    &mut font_system.borrow_mut(),
+                )
+            };
+            *measured = Some((max_width, (measured_w, h)));
             // 换行时 width = 容器可用宽度（占满行），renderer 用同宽换行保持一致。
             let width = match available.width {
                 AvailableSpace::Definite(w) => w,
@@ -106,20 +133,24 @@ pub fn compute_layout(
             Size { width, height: h }
         };
 
-        tree.taffy.compute_layout_with_measure(
-            root,
-            Size {
-                width: AvailableSpace::Definite(viewport_width),
-                height: AvailableSpace::Definite(viewport_height),
-            },
-            measure,
-        )?;
+        tree.taffy
+            .compute_layout_with_measure(
+                root,
+                Size {
+                    width: AvailableSpace::Definite(viewport_width),
+                    height: AvailableSpace::Definite(viewport_height),
+                },
+                measure,
+            )
+            // LAY-1：taffy 错误在边界处转 String，pub API 不泄漏引擎类型。
+            .map_err(|e| LayoutError::ComputeLayoutFailed(e.to_string()))?;
 
         for (&dom_addr, &taffy_node) in &tree.node_map {
             let layout = tree
                 .taffy
                 .layout(taffy_node)
-                .map_err(|_| LayoutError::NodeLayoutMissing(taffy_node))?;
+                // LAY-1：以 DOM 指针地址标识（与 LayoutResult 同 key）。
+                .map_err(|_| LayoutError::NodeLayoutMissing(dom_addr))?;
             result.nodes.insert(
                 dom_addr,
                 NodeLayout {

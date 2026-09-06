@@ -93,3 +93,17 @@ jobs:
           toolchain: "1.85"
       - uses: Swatinem/rust-cache@v2
       - run: cargo check
+
+  adr-taffy-guard:
+    # LAY-1：外部依赖解耦 ADR——taffy 类型不得出现在 pub API
+    # （pub 项签名 / pub use 再导出）。防 LayoutError 式泄漏回归。
+    name: ADR Taffy Leak Guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No taffy types in pub API surface
+        run: |
+          if grep -rnE '^[[:space:]]*pub([[:space:]]|\(|\{).*(fn|struct|enum|type|trait|use)[[:space:]].*taffy::' src/; then
+            echo "::error::taffy type leaked into a pub item (ADR: external dependency decoupling, audit LAY-1)"
+            exit 1
+          fi
