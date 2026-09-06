@@ -160,3 +160,51 @@ fn font_weight_bold_keeps_container_width_single_line() {
         bold.height
     );
 }
+
+// —— LAY-3: measure 缓存 ——
+
+/// 构造「div（auto 宽，可用宽度随视口）> text」并按给定视口布局。
+fn layout_text_viewport(
+    tree: &mut muskitty_layout::LayoutTree,
+    text_addr: usize,
+    vw: f32,
+) -> (f32, f32) {
+    let result = compute_layout(tree, vw, 600.0).expect("layout ok");
+    let l = *result.get(text_addr).expect("text node in layout");
+    (l.width, l.height)
+}
+
+/// LAY-3：同一节点以不同视口反复布局——缓存 key（可用宽度）变化时逐出
+/// 重测，命中时复用；任一路径结果都必须与无缓存语义一致：更窄视口换行
+/// 更多（高度更大），回到宽视口恢复原高度。
+#[test]
+fn measure_cache_hit_and_eviction_preserve_results() {
+    let doc = Node::new_document();
+    let container = Node::new_element_html("div", vec![], &doc);
+    let text_node = Node::new_text("measure cache eviction sample text", &doc);
+    let text_addr = Rc::as_ptr(&text_node) as usize;
+    append_child(&container, text_node).unwrap();
+
+    let styles: HashMap<usize, ComputedStyle> = HashMap::new();
+    let mut tree = build_layout_tree(&container, &styles);
+
+    // 宽视口：首测（冷缓存）。
+    let (w1, h1) = layout_text_viewport(&mut tree, text_addr, 800.0);
+    // 同视口再测：全命中缓存，结果一致。
+    let (w2, h2) = layout_text_viewport(&mut tree, text_addr, 800.0);
+    assert_eq!((w1, h1), (w2, h2), "cache hit must return identical size");
+
+    // 窄视口：key 变化 → 逐出重测；文本换行更多，高度更大。
+    let (_, h3) = layout_text_viewport(&mut tree, text_addr, 120.0);
+    assert!(
+        h3 > h1,
+        "narrower viewport must wrap into more lines: narrow={h3} wide={h1}"
+    );
+
+    // 回宽视口：再次逐出重测，恢复宽视口高度。
+    let (_, h4) = layout_text_viewport(&mut tree, text_addr, 800.0);
+    assert!(
+        (h1 - h4).abs() < f32::EPSILON,
+        "back to wide viewport must restore height: first={h1} last={h4}"
+    );
+}

@@ -8,8 +8,6 @@
 
 use std::collections::HashMap;
 
-use taffy::NodeId;
-
 /// 单个元素的布局结果。
 ///
 /// `x` / `y` 是相对 taffy 父节点原点的偏移（px）；`abs_x` / `abs_y` 是画布
@@ -33,47 +31,39 @@ pub struct NodeLayout {
 
 /// 布局计算错误。
 ///
-/// 所有错误均来自 taffy 内部：taffy 只在 NodeId 查询/树结构非法时报错，
-/// **不会**因 style 含 NaN/Inf 报错（taffy 0.12 无有限性检查）；非有限
-/// CSS 数值由 `style_map::clamp_length` 在映射边界钳制化解。调用方应通过
-/// `Result` 处理，而非依赖 `expect` panic 跨模块传播。
+/// 错误源自布局引擎内部（NodeId 查询失败或树结构非法）——引擎不会因
+/// style 含 NaN/Inf 报错（taffy 0.12 无有限性检查），非有限 CSS 数值由
+/// `style_map::clamp_length` 在映射边界钳制化解。调用方应通过 `Result`
+/// 处理，而非依赖 `expect` panic 跨模块传播。
+///
+/// LAY-1（ADR：外部依赖解耦）：变体载荷不携带 `taffy::TaffyError` /
+/// `taffy::NodeId`——引擎错误在边界处转成 `String`，节点以 DOM 指针
+/// 地址（与 [`LayoutResult::nodes`] 同 key）标识，上层 match 此错误
+/// 不被迫依赖 taffy，换布局引擎时错误处理无需返工。
 #[derive(Debug)]
 pub enum LayoutError {
-    /// taffy `compute_layout` 失败：NodeId 查询失败或树结构非法
-    /// （如子节点不属于该树）。
-    ComputeLayoutFailed(taffy::TaffyError),
-    /// `taffy.layout(node)` 查询失败：节点不在布局树中。
-    /// 通常由 `node_map` 与 taffy 内部状态不同步导致。
-    NodeLayoutMissing(NodeId),
+    /// 布局引擎 `compute_layout` 失败：NodeId 查询失败或树结构非法
+    /// （如子节点不属于该树）。载荷为引擎错误信息（原样保留诊断细节）。
+    ComputeLayoutFailed(String),
+    /// 布局结果查询失败：节点不在布局树中，载荷为 DOM 节点指针地址。
+    /// 通常由 `node_map` 与引擎内部状态不同步导致。
+    NodeLayoutMissing(usize),
 }
 
 impl std::fmt::Display for LayoutError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LayoutError::ComputeLayoutFailed(e) => {
-                write!(f, "taffy compute_layout failed: {e}")
+            LayoutError::ComputeLayoutFailed(msg) => {
+                write!(f, "layout engine compute_layout failed: {msg}")
             }
-            LayoutError::NodeLayoutMissing(id) => {
-                write!(f, "taffy layout missing for node {id:?}")
+            LayoutError::NodeLayoutMissing(dom_addr) => {
+                write!(f, "layout result missing for DOM node @{dom_addr:#x}")
             }
         }
     }
 }
 
-impl std::error::Error for LayoutError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            LayoutError::ComputeLayoutFailed(e) => Some(e),
-            LayoutError::NodeLayoutMissing(_) => None,
-        }
-    }
-}
-
-impl From<taffy::TaffyError> for LayoutError {
-    fn from(e: taffy::TaffyError) -> Self {
-        LayoutError::ComputeLayoutFailed(e)
-    }
-}
+impl std::error::Error for LayoutError {}
 
 /// 整棵布局树的结果集合。
 ///

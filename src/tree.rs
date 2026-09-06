@@ -8,7 +8,9 @@
 //! - CSS Display Module Level 3 §2 (Box Tree)
 //! - CSS Box Model Module Level 3 §2 (Box Model)
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use cosmic_text::FontSystem;
 use taffy::NodeId;
@@ -26,6 +28,14 @@ pub(crate) enum NodeContext {
         font_size: f32,
         font_family: String,
         font_weight: u16,
+        /// LAY-3：最近一次测量缓存（key = 容器可用宽度，`None` = 不定
+        /// /单行；value = 自然尺寸 `(width, height)`）。
+        ///
+        /// taffy 嵌套布局对同一节点多次调用 measure（文本测量占布局
+        /// 耗时 80%+，每节点全量 `Buffer::new` + Advanced shaping）。
+        /// 文本/字体参数在节点生命周期内不可变，测量结果仅由可用宽度
+        /// 决定——同 key 重复调用直接命中，跳过 shaping。
+        measured: Option<(Option<f32>, (f32, f32))>,
     },
 }
 
@@ -48,17 +58,55 @@ pub struct LayoutTree {
     /// 根节点 ID（若 DOM 根为 Element 且未 display:none 则有值）。
     pub(crate) root: Option<NodeId>,
     /// 文本测量用的字体系统（compute_layout 的 measure function 使用）。
-    pub(crate) font_system: FontSystem,
+    ///
+    /// LAY-2：`Rc` 共享——由会话级 [`SharedFontSystem`] 注入（多次建树
+    /// 复用同一份系统字体枚举），不再每次 [`LayoutTree::new`] 重建。
+    pub(crate) font_system: Rc<RefCell<FontSystem>>,
+}
+
+/// 会话级共享的字体系统句柄（LAY-2）。
+///
+/// `FontSystem::new()` 枚举并解析系统字体（50–300 ms）。原实现每次
+/// `build_layout_tree` 都随 [`LayoutTree::new`] 新建一份——每次布局、
+/// resize、热重载都重复支付。本类型由页面/会话级持有一份，多个
+/// [`LayoutTree`] 通过 [`crate::build_layout_tree_with_fonts`] 注入共享
+///（`Rc` 引用计数）。
+///
+/// 包装类型不泄漏 cosmic-text（ADR：外部依赖解耦）。
+#[derive(Clone)]
+pub struct SharedFontSystem {
+    pub(crate) inner: Rc<RefCell<FontSystem>>,
+}
+
+impl SharedFontSystem {
+    /// 枚举系统字体并构建共享句柄（较慢，每会话一次）。
+    pub fn new() -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(FontSystem::new())),
+        }
+    }
+}
+
+impl Default for SharedFontSystem {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LayoutTree {
-    /// 创建空布局树。
+    /// 创建空布局树（内部新建一份 [`FontSystem`]——每次调用支付一次
+    /// 系统字体枚举；会话级复用请用 [`LayoutTree::new_with_fonts`]）。
     pub fn new() -> Self {
+        Self::new_with_fonts(&SharedFontSystem::new())
+    }
+
+    /// 创建空布局树，注入会话级共享字体系统（LAY-2）。
+    pub fn new_with_fonts(fonts: &SharedFontSystem) -> Self {
         Self {
             taffy: TaffyTree::new(),
             node_map: HashMap::new(),
             root: None,
-            font_system: FontSystem::new(),
+            font_system: Rc::clone(&fonts.inner),
         }
     }
 
@@ -98,5 +146,35 @@ impl LayoutTree {
 impl Default for LayoutTree {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// LAY-2：`new_with_fonts` 注入的树共享同一份字体系统（Rc 指向同一
+    /// 分配），会话级句柄跨多次建树复用，系统字体只枚举一次。
+    #[test]
+    fn new_with_fonts_shares_one_font_system() {
+        let fonts = SharedFontSystem::new();
+        let a = LayoutTree::new_with_fonts(&fonts);
+        let b = LayoutTree::new_with_fonts(&fonts);
+        assert!(
+            Rc::ptr_eq(&a.font_system, &fonts.inner),
+            "tree must share the injected font system"
+        );
+        assert!(
+            Rc::ptr_eq(&a.font_system, &b.font_system),
+            "two trees from one handle must share one font system"
+        );
+    }
+
+    /// LAY-2：`LayoutTree::new`（兼容路径）自建字体系统，树间互不共享。
+    #[test]
+    fn new_owns_fresh_font_system() {
+        let a = LayoutTree::new();
+        let b = LayoutTree::new();
+        assert!(!Rc::ptr_eq(&a.font_system, &b.font_system));
     }
 }

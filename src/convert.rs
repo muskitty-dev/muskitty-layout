@@ -21,7 +21,7 @@ use crate::text::{
     resolve_font_family, resolve_font_size, resolve_font_weight, DEFAULT_FONT_FAMILY,
     DEFAULT_FONT_SIZE, DEFAULT_FONT_WEIGHT,
 };
-use crate::tree::{LayoutTree, NodeContext};
+use crate::tree::{LayoutTree, NodeContext, SharedFontSystem};
 
 /// DOM 节点指针地址 → ComputedStyle 的映射类型。
 pub type StyleMap = HashMap<usize, ComputedStyle>;
@@ -41,7 +41,19 @@ pub type StyleMap = HashMap<usize, ComputedStyle>;
 /// DOM 节点的 `Rc` 指针地址（`Rc::as_ptr(node) as usize`）作为 [`LayoutTree::node_map`]
 /// 的 key，供布局结果查询时关联回 DOM 节点。
 pub fn build_layout_tree(root: &Rc<RefCell<Node>>, styles: &StyleMap) -> LayoutTree {
-    let mut tree = LayoutTree::new();
+    build_layout_tree_with_fonts(root, styles, &SharedFontSystem::new())
+}
+
+/// 同 [`build_layout_tree`]，但注入会话级共享字体系统（LAY-2）。
+///
+/// `FontSystem::new()` 枚举系统字体需 50–300 ms；页面/会话级持有一份
+/// [`SharedFontSystem`]，每次建树/resize/热重载注入复用，不再重复支付。
+pub fn build_layout_tree_with_fonts(
+    root: &Rc<RefCell<Node>>,
+    styles: &StyleMap,
+    fonts: &SharedFontSystem,
+) -> LayoutTree {
+    let mut tree = LayoutTree::new_with_fonts(fonts);
     // 如果根节点是 Element，直接构建；否则查找第一个 Element 子节点
     // （HTML 解析的根是 Document 节点，需要找到 <html> 元素）
     let root_element = find_root_element(root);
@@ -140,6 +152,8 @@ fn build_node_recursive(
                         font_size: inherited_font_size,
                         font_family: inherited_font_family.to_string(),
                         font_weight: inherited_font_weight,
+                        // LAY-3：测量缓存冷启动（首次 measure 填充）。
+                        measured: None,
                     },
                 )
                 .expect("taffy new_leaf_with_context 失败：无法创建文本叶子节点");
