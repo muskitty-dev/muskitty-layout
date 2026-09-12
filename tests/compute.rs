@@ -95,6 +95,102 @@ fn single_element_fixed_size() {
     assert_approx(layout.y, 0.0, "根节点 y 坐标");
 }
 
+// —— M-3 batch 2: border 参与盒模型（CSS Box Model L3 §2-§3）——
+
+/// 四向 border 全设为 `width px` + `style`。
+fn set_border_all(cs: &mut ComputedStyle, width: f64, style_kw: &str) {
+    for side in ["top", "right", "bottom", "left"] {
+        cs.set(format!("border-{side}-style"), kw(style_kw));
+        cs.set(format!("border-{side}-width"), px(width));
+    }
+}
+
+/// 单元素布局（根节点尺寸），可指定 box-sizing 与边框。
+fn layout_root_with_border(
+    border: Option<(f64, &str)>,
+    box_sizing: Option<&str>,
+) -> muskitty_layout::NodeLayout {
+    let doc = Node::new_document();
+    let root = make_element("div", &doc);
+    let mut root_style = ComputedStyle::new();
+    root_style.set("width", px(100.0));
+    root_style.set("height", px(50.0));
+    if let Some((w, s)) = border {
+        set_border_all(&mut root_style, w, s);
+    }
+    if let Some(bs) = box_sizing {
+        root_style.set("box-sizing", kw(bs));
+    }
+    let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
+    styles.insert(Rc::as_ptr(&root) as usize, root_style);
+    let mut tree = build_layout_tree(&root, &styles);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout should succeed");
+    *result
+        .get(Rc::as_ptr(&root) as usize)
+        .expect("根节点应有布局结果")
+}
+
+#[test]
+fn border_adds_to_content_box_size() {
+    // content-box（初始值）：border box = content + border×2
+    let layout = layout_root_with_border(Some((10.0, "solid")), None);
+    assert_approx(layout.width, 120.0, "width:100 + 10px border×2");
+    assert_approx(layout.height, 70.0, "height:50 + 10px border×2");
+}
+
+#[test]
+fn border_with_border_box_sizing_stays_declared_size() {
+    // border-box：声明尺寸含边框，边框不额外增大盒子
+    let layout = layout_root_with_border(Some((10.0, "solid")), Some("border-box"));
+    assert_approx(layout.width, 100.0, "border-box 尺寸含边框");
+    assert_approx(layout.height, 50.0, "border-box 尺寸含边框");
+}
+
+#[test]
+fn border_style_none_takes_no_space() {
+    // §4.1: style none → used width 0，即使声明了 10px 宽度
+    let layout = layout_root_with_border(Some((10.0, "none")), None);
+    assert_approx(layout.width, 100.0, "none 不占空间");
+    assert_approx(layout.height, 50.0, "none 不占空间");
+}
+
+#[test]
+fn directional_border_offsets_child_only_on_that_side() {
+    // div[display:flex, width:200px, height:100px, border-left:20px, border-top:10px]
+    //   > span[50x50]
+    // 子元素原点相对父元素 border-box：偏移 = border + padding
+    let doc = Node::new_document();
+    let root = make_element("div", &doc);
+    let child = make_element("span", &doc);
+    append_child(&root, Rc::clone(&child)).unwrap();
+
+    let mut root_style = ComputedStyle::new();
+    root_style.set("display", kw("flex"));
+    root_style.set("width", px(200.0));
+    root_style.set("height", px(100.0));
+    root_style.set("border-left-style", kw("solid"));
+    root_style.set("border-left-width", px(20.0));
+    root_style.set("border-top-style", kw("solid"));
+    root_style.set("border-top-width", px(10.0));
+
+    let mut child_style = ComputedStyle::new();
+    child_style.set("width", px(50.0));
+    child_style.set("height", px(50.0));
+
+    let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
+    styles.insert(Rc::as_ptr(&root) as usize, root_style);
+    styles.insert(Rc::as_ptr(&child) as usize, child_style);
+
+    let mut tree = build_layout_tree(&root, &styles);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout should succeed");
+
+    let c = result
+        .get(Rc::as_ptr(&child) as usize)
+        .expect("child 应有布局结果");
+    assert_approx(c.x, 20.0, "border-left:20px → child.x");
+    assert_approx(c.y, 10.0, "border-top:10px → child.y");
+}
+
 #[test]
 fn block_element_fills_viewport_width() {
     // div（无 width → auto → Block 元素填满可用宽度）

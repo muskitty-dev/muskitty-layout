@@ -129,6 +129,18 @@ pub(crate) fn map_style(computed: Option<&ComputedStyle>) -> Style {
         left: map_length_percentage(cs.get("padding-left")),
     };
 
+    // —— border ——
+    // CSS Box Model L3 §2-§3: border 属于盒模型，参与 box-sizing 计算
+    // （content-box 下 border box = content + padding + border；border-box
+    // 下由 taffy 反推内容尺寸）。M-3 batch 2 前该字段从未赋值 → 边框不占
+    // 空间、box-sizing: border-box 对边框无效。
+    style.border = Rect {
+        top: used_border_width(cs, "border-top-style", "border-top-width"),
+        right: used_border_width(cs, "border-right-style", "border-right-width"),
+        bottom: used_border_width(cs, "border-bottom-style", "border-bottom-width"),
+        left: used_border_width(cs, "border-left-style", "border-left-width"),
+    };
+
     // —— box-sizing ——
     // CSS Box Model Level 3 §4.1: 初始值为 content-box.
     // 未知值按 §7.1 回退到初始值（ContentBox），而非 taffy 默认的 BorderBox.
@@ -387,6 +399,24 @@ fn map_length_percentage(cv: Option<&ComputedValue>) -> LengthPercentage {
         }
         None => LengthPercentage::ZERO,
     }
+}
+
+/// 单边 used border-width（CSS Backgrounds & Borders L3 §4.1）。
+///
+/// border-style 为 `none`/`hidden` 时 used width 为 0（不占空间）；属性缺失
+/// 视为初始值 `none`。否则取 computed 宽度——cascade 已把 `thin`/`medium`/
+/// `thick` 归一化为 px Dimension（见 cascade `normalize_line_width`），此处
+/// 无需再识别关键字。
+fn used_border_width(cs: &ComputedStyle, style_prop: &str, width_prop: &str) -> LengthPercentage {
+    let painted = cs
+        .get(style_prop)
+        .and_then(|cv| cv.keyword())
+        .map(|kw| !kw_eq(kw, "none") && !kw_eq(kw, "hidden"))
+        .unwrap_or(false);
+    if !painted {
+        return LengthPercentage::ZERO;
+    }
+    map_length_percentage(cs.get(width_prop))
 }
 
 /// 长度钳制上限：2^25 px（f32 在该量级仍保有 1px 精度），与 Servo/Gecko
@@ -777,6 +807,62 @@ mod tests {
         cs.set("padding-top", calc_px(12.0));
         let style = map_style(Some(&cs));
         assert_eq!(style.padding.top, LengthPercentage::length(12.0));
+    }
+
+    // —— border ——
+
+    /// 四向 `border-<side>-{style,width}` 全设为同一值。
+    fn set_border(cs: &mut ComputedStyle, width: f64, style_kw: &str) {
+        for side in ["top", "right", "bottom", "left"] {
+            cs.set(format!("border-{side}-style"), kw(style_kw));
+            cs.set(format!("border-{side}-width"), px(width));
+        }
+    }
+
+    #[test]
+    fn border_px_maps_to_taffy_rect() {
+        // M-3 batch 2: border 参与盒模型（此前 style.border 从未赋值）
+        let mut cs = ComputedStyle::new();
+        set_border(&mut cs, 10.0, "solid");
+        let style = map_style(Some(&cs));
+        assert_eq!(style.border.top, LengthPercentage::length(10.0));
+        assert_eq!(style.border.right, LengthPercentage::length(10.0));
+        assert_eq!(style.border.bottom, LengthPercentage::length(10.0));
+        assert_eq!(style.border.left, LengthPercentage::length(10.0));
+    }
+
+    #[test]
+    fn border_per_side_widths_map_independently() {
+        let mut cs = ComputedStyle::new();
+        cs.set("border-top-style", kw("solid"));
+        cs.set("border-top-width", px(1.0));
+        cs.set("border-right-style", kw("dashed"));
+        cs.set("border-right-width", px(2.0));
+        cs.set("border-bottom-style", kw("none"));
+        cs.set("border-bottom-width", px(3.0));
+        cs.set("border-left-style", kw("hidden"));
+        cs.set("border-left-width", px(4.0));
+        let style = map_style(Some(&cs));
+        assert_eq!(style.border.top, LengthPercentage::length(1.0));
+        assert_eq!(style.border.right, LengthPercentage::length(2.0));
+        // §4.1: style none/hidden → used width 0
+        assert_eq!(style.border.bottom, LengthPercentage::ZERO);
+        assert_eq!(style.border.left, LengthPercentage::ZERO);
+    }
+
+    #[test]
+    fn border_style_missing_or_none_contributes_zero() {
+        // 未声明 border-style（初始值 none）→ 宽度不占空间
+        let mut cs = ComputedStyle::new();
+        cs.set("border-top-width", px(50.0));
+        let style = map_style(Some(&cs));
+        assert_eq!(style.border.top, LengthPercentage::ZERO);
+
+        // style solid 但无宽度（初始 medium 未归一化时无 px）→ 0
+        let mut cs = ComputedStyle::new();
+        cs.set("border-top-style", kw("solid"));
+        let style = map_style(Some(&cs));
+        assert_eq!(style.border.top, LengthPercentage::ZERO);
     }
 
     // —— margin ——
