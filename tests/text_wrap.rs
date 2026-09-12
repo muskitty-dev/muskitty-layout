@@ -91,6 +91,16 @@ fn kw(s: &str) -> ComputedValue {
     ))])
 }
 
+/// 构造数字 ComputedValue（如 `line-height: 2`）。
+fn num(val: f64) -> ComputedValue {
+    ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(Token::Number(
+        Numeric {
+            value: val,
+            is_integer: false,
+        },
+    ))])
+}
+
 /// 构造「div[width: wpx + font 声明] > text」并 compute_layout，返回 text 布局。
 ///
 /// `font_size` / `font_weight` 为 `Some` 时在容器上声明（text 节点继承）。
@@ -206,5 +216,174 @@ fn measure_cache_hit_and_eviction_preserve_results() {
     assert!(
         (h1 - h4).abs() < f32::EPSILON,
         "back to wide viewport must restore height: first={h1} last={h4}"
+    );
+}
+
+// —— M-3 batch 3: line-height / text-transform 测量 ——
+
+/// 构造「div[width + 可选声明] > text」并返回 text 节点布局。
+///
+/// `decls` 为按序写入容器的 `(属性, 值)`（text 节点继承容器样式）。
+fn layout_text_with_decls(
+    width: f64,
+    text: &str,
+    decls: &[(&str, ComputedValue)],
+) -> muskitty_layout::NodeLayout {
+    let doc = Node::new_document();
+    let container = Node::new_element_html("div", vec![], &doc);
+    let text_node = Node::new_text(text, &doc);
+    let text_addr = Rc::as_ptr(&text_node) as usize;
+    append_child(&container, text_node).unwrap();
+
+    let mut styles: HashMap<usize, ComputedStyle> = HashMap::new();
+    let mut cs = ComputedStyle::new();
+    cs.set("width", px(width));
+    for (name, value) in decls {
+        cs.set(*name, value.clone());
+    }
+    styles.insert(Rc::as_ptr(&container) as usize, cs);
+
+    let mut tree = build_layout_tree(&container, &styles);
+    let result = compute_layout(&mut tree, 800.0, 600.0).expect("layout ok");
+    *result.get(text_addr).expect("text node in layout")
+}
+
+#[test]
+fn line_height_px_sets_wrapped_line_spacing() {
+    // 容器 100px 让长文本折成多行；line-height: 40px → 每行 40px 行距
+    let text = "This is a long text that should wrap into multiple lines";
+    let custom = layout_text_with_decls(100.0, text, &[("line-height", px(40.0))]);
+    let default = layout_text_with_decls(100.0, text, &[]);
+    assert!(
+        custom.height > default.height,
+        "40px line-height must exceed the 1.2×16px default: custom={} default={}",
+        custom.height,
+        default.height
+    );
+    // 多行高度应为行距的整数倍（同一份测量 → 单行高度的整数倍）
+    let single = layout_text_with_decls(300.0, "Hi", &[("line-height", px(40.0))]);
+    assert!(
+        (single.height - 40.0).abs() < 1.0,
+        "single line box should equal 40px line-height, got {}",
+        single.height
+    );
+    let ratio = custom.height / single.height;
+    assert!(
+        (ratio - ratio.round()).abs() < 0.05,
+        "wrapped height should be a whole number of 40px lines, got {}",
+        custom.height
+    );
+}
+
+#[test]
+fn line_height_number_multiplies_font_size() {
+    // line-height: 2 + font-size: 16px → 单行 32px（默认 1.2 → 19.2px）
+    let lh2 = layout_text_with_decls(
+        300.0,
+        "Hi",
+        &[("font-size", px(16.0)), ("line-height", num(2.0))],
+    );
+    let normal = layout_text_with_decls(300.0, "Hi", &[("font-size", px(16.0))]);
+    assert!(
+        (lh2.height - 32.0).abs() < 1.0,
+        "line-height: 2 × 16px = 32px, got {}",
+        lh2.height
+    );
+    assert!(
+        (normal.height - 19.2).abs() < 1.0,
+        "default normal line-height = 1.2 × 16px = 19.2px, got {}",
+        normal.height
+    );
+}
+
+#[test]
+fn line_height_number_scales_with_font_size() {
+    // 同一个倍数在 32px 字号下 → 64px（行高随字号缩放，不是固定值）
+    let lh2_32 = layout_text_with_decls(
+        300.0,
+        "Hi",
+        &[("font-size", px(32.0)), ("line-height", num(2.0))],
+    );
+    assert!(
+        (lh2_32.height - 64.0).abs() < 1.0,
+        "line-height: 2 × 32px = 64px, got {}",
+        lh2_32.height
+    );
+}
+
+#[test]
+fn line_height_percentage_resolves_against_font_size() {
+    // 150% × 16px = 24px（百分比经计算值阶段归一化为 px）
+    let pct = layout_text_with_decls(
+        300.0,
+        "Hi",
+        &[
+            ("font-size", px(16.0)),
+            (
+                "line-height",
+                ComputedValue::from_tokens(vec![ComponentValue::PreservedToken(
+                    Token::Percentage(Numeric {
+                        value: 150.0,
+                        is_integer: false,
+                    }),
+                )]),
+            ),
+        ],
+    );
+    assert!(
+        (pct.height - 24.0).abs() < 1.0,
+        "150% × 16px = 24px, got {}",
+        pct.height
+    );
+}
+
+#[test]
+fn text_transform_is_applied_before_measurement() {
+    // 转换在布局前生效：`"abc" + uppercase` 与 `"ABC"`（无转换）必须测出
+    // **完全相同**的排版结果——这比"大写更宽"之类的字体相关比较更稳健。
+    let transformed = layout_text_with_decls(
+        40.0,
+        "abcdefghij klmnopqrst",
+        &[("font-size", px(16.0)), ("text-transform", kw("uppercase"))],
+    );
+    let literal = layout_text_with_decls(40.0, "ABCDEFGHIJ KLMNOPQRST", &[("font-size", px(16.0))]);
+    assert!(
+        (transformed.height - literal.height).abs() < f32::EPSILON,
+        "transformed text must measure identically to the literal uppercase text: \
+         transformed={} literal={}",
+        transformed.height,
+        literal.height
+    );
+
+    // capitalize 同理：首字母大写后与字面量一致
+    let capitalized = layout_text_with_decls(
+        40.0,
+        "hello world",
+        &[
+            ("font-size", px(16.0)),
+            ("text-transform", kw("capitalize")),
+        ],
+    );
+    let literal_cap = layout_text_with_decls(40.0, "Hello World", &[("font-size", px(16.0))]);
+    assert!(
+        (capitalized.height - literal_cap.height).abs() < f32::EPSILON,
+        "capitalize must measure identically to the literal capitalized text: \
+         capitalized={} literal={}",
+        capitalized.height,
+        literal_cap.height
+    );
+}
+
+#[test]
+fn text_transform_none_measures_source_text() {
+    // 对照组：无转换时 "hello world" 与 "HELLO WORLD" 在大写更宽的字体下
+    // 行数不会更少（宽度不同 → 测量结果随文本而变，证明上面的相等不是恒等）
+    let lower = layout_text_with_decls(40.0, "hello world", &[("font-size", px(16.0))]);
+    let upper = layout_text_with_decls(40.0, "HELLO WORLD", &[("font-size", px(16.0))]);
+    assert!(
+        upper.height >= lower.height,
+        "uppercase glyphs are at least as wide, so never fewer lines: upper={} lower={}",
+        upper.height,
+        lower.height
     );
 }

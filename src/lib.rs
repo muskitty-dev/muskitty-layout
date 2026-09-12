@@ -83,6 +83,7 @@ pub fn compute_layout(
                 font_size,
                 font_family,
                 font_weight,
+                line_height,
                 measured,
             }) = ctx
             else {
@@ -111,6 +112,7 @@ pub fn compute_layout(
                     *font_size,
                     font_family,
                     *font_weight,
+                    *line_height,
                     max_width,
                     &mut font_system.borrow_mut(),
                 )
@@ -120,6 +122,7 @@ pub fn compute_layout(
                     *font_size,
                     font_family,
                     *font_weight,
+                    *line_height,
                     max_width,
                     &mut font_system.borrow_mut(),
                 )

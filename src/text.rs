@@ -25,17 +25,20 @@ pub(crate) const DEFAULT_FONT_WEIGHT: u16 = 400;
 /// 测量文本的自然尺寸。
 ///
 /// `max_width` 为 `Some(w)` 时按宽度 `w` 换行（T-3），`None` 时单行不换行。
-/// 返回 `(width, height)`（px）。行高按 `font_size * 1.2` 近似（CSS `normal`
-/// 行高的简化），精确 line-height 解析推迟。
+/// `line_height` 为 `line-height` 的使用值（px，M-3 batch 3）：由 cascade
+/// `text_props::used_line_height_px` 解析（含 `normal`/数/长度语义与继承倍数
+/// 折算），直接作为 cosmic-text [`Metrics`] 的行高——替代原先的
+/// `font_size * 1.2` 硬编码近似。
+/// 返回 `(width, height)`（px）。
 pub(crate) fn measure_text(
     text: &str,
     font_size: f32,
     font_family: &str,
     font_weight: u16,
+    line_height: f32,
     max_width: Option<f32>,
     font_system: &mut FontSystem,
 ) -> (f32, f32) {
-    let line_height = font_size * 1.2;
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
     // 换行：宽度上限为 Some 则换行，None 则单行。
     buffer.set_size(font_system, max_width, None);

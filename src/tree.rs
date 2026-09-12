@@ -24,10 +24,15 @@ pub(crate) enum NodeContext {
     /// Text 节点：携带文本内容 + 字体样式，布局时由 measure function 按
     /// 容器可用宽度换行测量。
     Text {
+        /// 文本内容。M-3 batch 3：`text-transform` 已在此生效（存转换后文本，
+        /// 保证测量与绘制看到同一份内容，缓存键也因此自洽）。
         text: String,
         font_size: f32,
         font_family: String,
         font_weight: u16,
+        /// `line-height` 的使用值（px，M-3 batch 3；cascade
+        /// `text_props::used_line_height_px` 解析，含继承的倍数折算）。
+        line_height: f32,
         /// LAY-3：最近一次测量缓存（key = 容器可用宽度，`None` = 不定
         /// /单行；value = 自然尺寸 `(width, height)`）。
         ///

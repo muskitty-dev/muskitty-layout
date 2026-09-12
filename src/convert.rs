@@ -65,9 +65,13 @@ pub fn build_layout_tree_with_fonts(
             &mut tree,
             &root_el,
             styles,
-            DEFAULT_FONT_SIZE,
-            DEFAULT_FONT_FAMILY,
-            DEFAULT_FONT_WEIGHT,
+            &InheritedText {
+                font_size: DEFAULT_FONT_SIZE,
+                font_family: DEFAULT_FONT_FAMILY,
+                font_weight: DEFAULT_FONT_WEIGHT,
+                line_height: DEFAULT_FONT_SIZE * muskitty_cascade::NORMAL_LINE_HEIGHT,
+                text_transform: None,
+            },
         );
         tree.root = built.in_flow.first().copied();
         // 子树内无 positioned ancestor 的 absolute box 挂到根盒（html），
@@ -109,6 +113,24 @@ struct Built {
     absolute: Vec<NodeId>,
 }
 
+/// 递归下传的**继承文本上下文**（T-3 字体属性 / M-3 batch 3 行高与转换）。
+///
+/// 这些值对元素子树生效（继承属性），text 叶节点直接取其快照做测量。
+/// 收成结构体而非逐个参数：T-3 与 batch 3 已两次扩列，后续
+/// `white-space` / `direction` 还要再加（clippy 8 参数上限）。
+struct InheritedText<'a> {
+    /// 继承的 font-size（px 使用值）。
+    font_size: f32,
+    /// 继承的 font-family（首个族名）。
+    font_family: &'a str,
+    /// 继承的 font-weight（100-900）。
+    font_weight: u16,
+    /// 继承的 line-height（px 使用值，cascade `text_props` 解析）。
+    line_height: f32,
+    /// 继承的 text-transform 关键字（`None` = 未声明，等同 `none`）。
+    text_transform: Option<&'a str>,
+}
+
 /// 递归为 DOM 子树构建 taffy 节点。
 ///
 /// 返回 [`Built`]：
@@ -121,9 +143,7 @@ fn build_node_recursive(
     tree: &mut LayoutTree,
     node: &Rc<RefCell<Node>>,
     styles: &StyleMap,
-    inherited_font_size: f32,
-    inherited_font_family: &str,
-    inherited_font_weight: u16,
+    inherited: &InheritedText<'_>,
 ) -> Built {
     // —— Text 节点：携带 context 的 leaf，布局时 measure function 换行测量（T-3）——
     // Text 是叶子，无子递归；不预先测量，尺寸由 compute_layout 的 measure
@@ -143,15 +163,21 @@ fn build_node_recursive(
                 };
             }
             let addr = Rc::as_ptr(node) as usize;
+            // M-3 batch 3：`text-transform` 在**布局前**生效（CSS Text L3 §2.1
+            // 的转换改变用于排版与绘制的文本）。此处存转换后文本，保证测量
+            // 与 renderer 绘制看到同一份内容（缓存键亦随之自洽）。
+            let transformed =
+                muskitty_cascade::apply_text_transform(&text.data, inherited.text_transform);
             let leaf = tree
                 .taffy
                 .new_leaf_with_context(
                     taffy::style::Style::default(),
                     NodeContext::Text {
-                        text: text.data.clone(),
-                        font_size: inherited_font_size,
-                        font_family: inherited_font_family.to_string(),
-                        font_weight: inherited_font_weight,
+                        text: transformed.into_owned(),
+                        font_size: inherited.font_size,
+                        font_family: inherited.font_family.to_string(),
+                        font_weight: inherited.font_weight,
+                        line_height: inherited.line_height,
                         // LAY-3：测量缓存冷启动（首次 measure 填充）。
                         measured: None,
                     },
@@ -174,6 +200,8 @@ fn build_node_recursive(
         own_font_size,
         own_font_family,
         own_font_weight,
+        own_line_height,
+        own_text_transform,
         is_absolute,
         is_positioned,
     ) = {
@@ -211,15 +239,29 @@ fn build_node_recursive(
         // 时回退到继承值。
         let own_font_size = computed
             .and_then(resolve_font_size)
-            .unwrap_or(inherited_font_size);
+            .unwrap_or(inherited.font_size);
 
         // 自身 font-family / font-weight（继承属性，T-3）。
         let own_font_family = computed
             .and_then(resolve_font_family)
-            .unwrap_or_else(|| inherited_font_family.to_string());
+            .unwrap_or_else(|| inherited.font_family.to_string());
         let own_font_weight = computed
             .and_then(resolve_font_weight)
-            .unwrap_or(inherited_font_weight);
+            .unwrap_or(inherited.font_weight);
+
+        // 自身 line-height 使用值（继承属性，M-3 batch 3）：语义由 cascade
+        // 单一来源给出（`normal`=1.2×font-size、数为倍数、百分比已在计算值
+        // 阶段转 px）。无 computed style 的节点沿用继承值。
+        let own_line_height = computed
+            .map(|cs| muskitty_cascade::used_line_height_px(cs, own_font_size))
+            .unwrap_or(inherited.line_height);
+
+        // 自身 text-transform 关键字（继承属性，M-3 batch 3）。compute_styles
+        // 已应用继承，故元素帧上必定可取到关键字（初始值 none）。
+        let own_text_transform: Option<String> = computed
+            .and_then(muskitty_cascade::text_transform_keyword)
+            .map(str::to_string)
+            .or_else(|| inherited.text_transform.map(str::to_string));
 
         // position 关键字（默认 static）。absolute/fixed → 脱离 normal flow；
         // absolute/fixed/relative 均为 positioned（成为子 absolute 的 containing block）。
@@ -240,6 +282,8 @@ fn build_node_recursive(
             own_font_size,
             own_font_family,
             own_font_weight,
+            own_line_height,
+            own_text_transform,
             is_absolute,
             is_positioned,
         )
@@ -248,15 +292,15 @@ fn build_node_recursive(
     // 递归子节点，分别收集正常流与 absolute box。
     let mut in_flow_children: Vec<NodeId> = Vec::new();
     let mut absolute_desc: Vec<NodeId> = Vec::new();
+    let child_inherited = InheritedText {
+        font_size: own_font_size,
+        font_family: &own_font_family,
+        font_weight: own_font_weight,
+        line_height: own_line_height,
+        text_transform: own_text_transform.as_deref(),
+    };
     for child in &children {
-        let built = build_node_recursive(
-            tree,
-            child,
-            styles,
-            own_font_size,
-            &own_font_family,
-            own_font_weight,
-        );
+        let built = build_node_recursive(tree, child, styles, &child_inherited);
         in_flow_children.extend(built.in_flow);
         absolute_desc.extend(built.absolute);
     }
