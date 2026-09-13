@@ -15,6 +15,7 @@ fn px(val: f64) -> ComputedValue {
         Numeric {
             value: val,
             is_integer: false,
+            has_sign: false,
         },
         "px".to_string(),
     ))])
@@ -97,6 +98,7 @@ fn num(val: f64) -> ComputedValue {
         Numeric {
             value: val,
             is_integer: false,
+            has_sign: false,
         },
     ))])
 }
@@ -325,6 +327,7 @@ fn line_height_percentage_resolves_against_font_size() {
                     Token::Percentage(Numeric {
                         value: 150.0,
                         is_integer: false,
+                        has_sign: false,
                     }),
                 )]),
             ),

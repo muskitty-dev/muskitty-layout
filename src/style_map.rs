@@ -540,6 +540,7 @@ mod tests {
             Numeric {
                 value: val,
                 is_integer: false,
+                has_sign: false,
             },
             "px".to_string(),
         ))])
@@ -551,6 +552,7 @@ mod tests {
             Numeric {
                 value: val,
                 is_integer: false,
+                has_sign: false,
             },
         ))])
     }
@@ -561,6 +563,7 @@ mod tests {
             Numeric {
                 value: val,
                 is_integer: false,
+                has_sign: false,
             },
         ))])
     }
@@ -585,6 +588,7 @@ mod tests {
             Numeric {
                 value: val,
                 is_integer: false,
+                has_sign: false,
             },
             "px".to_string(),
         ))])
@@ -596,6 +600,7 @@ mod tests {
             Numeric {
                 value: val,
                 is_integer: false,
+                has_sign: false,
             },
         ))])
     }
@@ -1285,6 +1290,7 @@ mod tests {
                 Numeric {
                     value: f64::INFINITY,
                     is_integer: false,
+                    has_sign: false,
                 },
                 "fr".to_string(),
             ))]),

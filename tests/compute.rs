@@ -24,6 +24,7 @@ fn px(val: f64) -> ComputedValue {
         Numeric {
             value: val,
             is_integer: false,
+            has_sign: false,
         },
         "px".to_string(),
     ))])
@@ -40,6 +41,7 @@ fn num(val: f64) -> ComputedValue {
         Numeric {
             value: val,
             is_integer: false,
+            has_sign: false,
         },
     ))])
 }
