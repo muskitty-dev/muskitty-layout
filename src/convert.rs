@@ -356,6 +356,12 @@ fn build_node_recursive(
 /// 非渲染元素标签：这些标签不产生可视化盒（head 及其元数据、脚本、样式等）。
 ///
 /// 无 UA 样式表时给它们建布局盒会生成多余的空白盒（P2-13）。
+///
+/// **CS-1f 之后本表冗余**：chrome 的 UA 样式表（`crates/muskitty-chrome/src/ua.css`，
+/// HTML §15.3.1）已用 `display: none` 覆盖这 8 个标签**以及规范清单里其余的
+/// 7 个**（`area/datalist/basefont/noembed/noframes/param/rp`），它们经
+/// `Display::None` 在本函数之后的分支被排除。保留为防御（layout/renderer 的
+/// 既有测试不注入 UA 表）。删除条件：layout 测试统一走含 UA 表的入口。
 fn is_non_rendered_tag(tag: &str) -> bool {
     matches!(
         tag,
